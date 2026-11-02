@@ -1,0 +1,86 @@
+name: Gt64 (North America)
+sha1: b941246af78748f4e081f496dac0a9e2056d3d8d
+options:
+  basename: gt64
+  target_path: baserom.z64
+  elf_path: build/gt64.elf
+  base_path: .
+  platform: n64
+  compiler: IDO
+
+  # asm_path: asm
+  # src_path: src
+  # build_path: build
+  # create_asm_dependencies: True
+
+  ld_script_path: gt64.ld
+  ld_dependencies: True
+
+  find_file_boundaries: True
+  header_encoding: ASCII
+
+  o_as_suffix: True
+  use_legacy_include_asm: False
+  mips_abi_float_regs: o32
+
+  # section_order: [".text", ".data", ".rodata", ".bss"]
+  # auto_link_sections: [".data", ".rodata", ".bss"]
+
+  symbol_addrs_path:
+    - symbol_addrs.txt
+  reloc_addrs_path:
+    - reloc_addrs.txt
+
+  # undefined_funcs_auto_path: undefined_funcs_auto.txt
+  # undefined_syms_auto_path: undefined_syms_auto.txt
+
+  extensions_path: tools/splat_ext
+
+  # string_encoding: ASCII
+  # data_string_encoding: ASCII
+  rodata_string_guesser_level: 2
+  data_string_guesser_level: 2
+  # libultra_symbols: True
+  # hardware_regs: True
+  gfx_ucode: f3dex
+segments:
+  - name: header
+    type: header
+    start: 0x0
+
+  - name: ipl3
+    type: bin
+    start: 0x40
+
+  - name: entry
+    type: code
+    start: 0x1000
+    vram: 0x80000400
+    subsegments:
+      - [0x1000, hasm]
+
+  - name: main
+    type: code
+    start: 0x1050
+    vram: 0x80000450
+    follows_vram: entry
+    bss_size: 0xDB800
+    subsegments:
+      - [0x1050, asm]
+      - [0x5D5D0, bin, rspboot]
+      - [0x5D800, data]
+      - { type: bss, vram: 0x800C6D20 }
+
+  - name: ovl_front
+    type: code
+    start: 0xC7920
+    vram: 0x801A2520
+    exclusive_ram_id: ovl
+    subsegments:
+      - [0xC7920, asm]
+      - [0xE57A0, data]
+
+  - type: bin
+    start: 0xF0500
+
+  - [0xC00000]

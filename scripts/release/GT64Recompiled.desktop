@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GT 64 Recompiled
+Comment=Native PC port of GT 64: Championship Edition (N64), built with N64Recomp
+Exec=GT64Recompiled
+Icon=GT64Recompiled
+Categories=Game;
+Terminal=false
