@@ -16,10 +16,10 @@ static void add_graphics_options(recomp::config::Config &config) {
     config.add_enum_option(
         gt::configkeys::graphics::frame_rate,
         "Frame Rate",
-        "<recomp-color primary>60 FPS</recomp-color> renders every video frame. "
+        "<recomp-color primary>60 FPS</recomp-color> (experimental) lifts the 30 FPS cap the game uses in races and some menus. "
         "<recomp-color primary>Original</recomp-color> matches the N64.",
         frame_rate_options,
-        gt::FrameRate::Fps60
+        gt::FrameRate::Original
     );
 }
 

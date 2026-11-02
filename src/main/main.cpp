@@ -578,7 +578,9 @@ int main(int argc, char** argv) {
     ultramodern::renderer::callbacks_t renderer_callbacks{
         .create_render_context = [](uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode) {
             gt::stats_set_rdram(rdram);
-            auto presentation_mode = ultramodern::renderer::PresentationMode::PresentEarly;
+            // Present what the VI scans out (Console): GT64 can swap in a frame before it has finished drawing it, and presenting
+            // early showed those frames (flicker in the attract demo and menus).
+            auto presentation_mode = ultramodern::renderer::PresentationMode::Console;
             return recompui::renderer::create_render_context(rdram, window_handle, presentation_mode, developer_mode);
         },
     };
