@@ -488,6 +488,8 @@ void setup_autoboot() {
                 fprintf(stderr, "GT_ROM validation failed (%d)\n", (int)err);
                 return;
             }
+            // select_rom stores the ROM but doesn't mark it valid until the stored ROMs are rechecked.
+            recomp::check_all_stored_roms();
         }
         if (recomp::is_rom_valid(game_id)) {
             fprintf(stderr, "Auto-booting %s\n", reinterpret_cast<const char*>(game_id.c_str()));

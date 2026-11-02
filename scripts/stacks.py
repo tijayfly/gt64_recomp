@@ -14,7 +14,7 @@ KEEP = re.compile(r"func_|_recomp|^os|^__os|Sched_|Game_|game_|recomp_entrypoint
 
 def sample(pid):
     out = subprocess.run(
-        ["sudo", "-n", "gdb", "-p", str(pid), "-batch", "-ex", "set pagination off", "-ex", "thread apply all bt 20"],
+        ["gdb", "-p", str(pid), "-batch", "-ex", "set pagination off", "-ex", "thread apply all bt 20"],
         capture_output=True, text=True).stdout
     threads = []
     name, frames = None, []
