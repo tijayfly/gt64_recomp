@@ -10,8 +10,8 @@ Gamepad support · any resolution · widescreen · 60 FPS (planned)
 ---
 
 > [!WARNING]
-> **Work in progress: it doesn't boot yet.** The ROM is mapped and the recompiler configs are written; the first
-> build is next. See [Status](#status).
+> **Work in progress.** It boots, plays audio and renders the front end and menus at 60 FPS. Races are untested.
+> See [Status](#status).
 
 This is a static recompilation of *GT 64: Championship Edition* (N64, USA) made with
 [N64Recomp](https://github.com/N64Recomp/N64Recomp). The game's MIPS code is translated to C, compiled for your PC
@@ -29,11 +29,14 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] ROM mapped: main code, one front-end code overlay, RSP microcodes
 - [x] libultra functions named (156), so the runtime can replace them
 - [x] N64Recomp and RSPRecomp configs
-- [ ] First build boots to the title screen
-- [ ] Menus, races, saves, audio
-- [ ] Gamepad defaults for racing (triggers for throttle/brake)
-- [ ] 60 FPS
-- [ ] Windows x64 build
+- [x] Boots to the licence and title screens, with audio
+- [x] Front end and race setup menus render (fixed RT64's S2DEX bgCopy for 4-bit backgrounds)
+- [x] Gamepad defaults for racing: triggers for throttle/brake, shoulders shift
+- [x] 60 FPS (the game times its logic by elapsed time; its 30 FPS cap in some modes is lifted)
+- [x] Windows x64 build (cross-compiled, see docs/WINDOWS_CROSS.md)
+- [ ] Races verified, game speed checked at 60 FPS
+- [ ] Saves (EEPROM / Controller Pak)
+- [ ] One menu background with wrong colours
 
 ## Building
 
