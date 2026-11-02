@@ -45,16 +45,6 @@ extern "C" void gt_on_rom_read(uint32_t rom, uint32_t ram, uint32_t size) {
 }
 
 #include <cstdio>
-extern "C" void gt_debug_sched_msg(uint8_t* rdram, recomp_context* ctx) {
-    static int n = 0;
-    uint32_t sp = (uint32_t)ctx->r29;
-    uint32_t msg = *reinterpret_cast<uint32_t*>(rdram + (sp + 0x5C - 0x80000000u));
-    uint32_t hi = *reinterpret_cast<uint32_t*>(rdram + (0x800F1310 - 0x80000000u));
-    uint32_t lo = *reinterpret_cast<uint32_t*>(rdram + (0x800F1314 - 0x80000000u));
-    if ((n++ % 60) < 3) {
-        fprintf(stderr, "[sched] n=%d msg=0x%08X ts=%08X%08X\n", n, msg, hi, lo);
-    }
-}
 
 // Debug: count RSP task types submitted from each site (GT_TASKLOG=1).
 #include <chrono>
