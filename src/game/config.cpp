@@ -4,6 +4,8 @@
 #include "recompinput/input_mapping.h"
 #include "util/file.h"
 
+#include "ultramodern/config.hpp"
+
 #include "gt_config.h"
 
 static void add_graphics_options(recomp::config::Config &config) {
@@ -19,7 +21,10 @@ static void add_graphics_options(recomp::config::Config &config) {
         "<recomp-color primary>60 FPS</recomp-color> (experimental) lifts the 30 FPS cap the game uses in races and some menus. "
         "<recomp-color primary>Original</recomp-color> matches the N64.",
         frame_rate_options,
-        gt::FrameRate::Original
+        gt::FrameRate::Original,
+        // Hidden: lifting the game's 30 FPS cap makes races and the intro run too fast (part of the game logic counts
+        // frames). Kept for development.
+        true
     );
 }
 
@@ -74,6 +79,9 @@ static void set_control_descriptions() {
     set_game_input_description(GameInput::START, "Pause.");
 }
 
+// RT64's "Display" refresh rate draws extra frames by interpolating between the game's frames, which needs per-object
+// matching GT64 doesn't provide: some in-between frames showed only the sky (blue flashes). The refresh rate is forced
+// to "Original" and its option hidden.
 void gt::init_config() {
     std::filesystem::path recomp_dir = recompui::file::get_app_folder_path();
     if (!recomp_dir.empty()) {
@@ -91,5 +99,14 @@ void gt::init_config() {
     recompui::config::create_controls_tab();
     recompui::config::create_sound_tab();
     recompui::config::create_mods_tab();
+    recompui::config::get_graphics_config().update_option_hidden(recompui::config::graphics::options::rr_option, true);
     recompui::config::finalize();
+    {
+        auto &graphics = recompui::config::get_graphics_config();
+        const uint32_t original = static_cast<uint32_t>(ultramodern::renderer::RefreshRate::Original);
+        if (std::get<uint32_t>(graphics.get_option_value(recompui::config::graphics::options::rr_option)) != original) {
+            graphics.set_option_value(recompui::config::graphics::options::rr_option, original);
+            graphics.save_config();
+        }
+    }
 }
