@@ -608,6 +608,7 @@ int main(int argc, char** argv) {
         .vi_callback = []() {
             recompinput::update_rumble();
             gt::stats_on_vi();
+            gt::widescreen_on_vi();
         },
         .gfx_init_callback = nullptr,
     };

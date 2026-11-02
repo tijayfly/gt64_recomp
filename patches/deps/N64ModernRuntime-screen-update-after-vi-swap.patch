@@ -1,0 +1,24 @@
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 090cc42..69102c4 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -222,13 +222,15 @@ void vi_thread_func() {
+             events_context.action_queue.enqueue(DummyWorkloadAction{events_context.vi.get_next_state()->framebuffer});
+         }
+ 
+-        // Queue a screen update for the graphics thread with the current VI register state.
+-        // Doing this before the VI update is equivalent to updating the screen after the previous frame's scanout finished.
+-        events_context.action_queue.enqueue(ScreenUpdateAction{ events_context.vi.regs });
+-
+         // Update VI registers and swap VI modes.
+         events_context.vi.update_vi();
+ 
++        // Queue a screen update for the graphics thread with the new VI register state. The framebuffer it shows was
++        // finished before the game swapped to it. Queuing the previous state instead (before the update) can show a
++        // buffer the game has already started drawing its next frame into: RSP tasks complete instantly here, so a game
++        // can clear the old buffer right after swapping, before this VI (GT64 flashed black/sky-only frames).
++        events_context.action_queue.enqueue(ScreenUpdateAction{ events_context.vi.regs });
++
+         // If the game has started, handle sending VI and AI events.
+         if (ultramodern::is_game_started()) {
+             remaining_retraces--;

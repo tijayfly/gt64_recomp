@@ -57,9 +57,10 @@ extern "C" void gt_debug_task(uint8_t* rdram, uint32_t task, int site) {
     static auto last = std::chrono::steady_clock::now();
     uint32_t type = *reinterpret_cast<uint32_t*>(rdram + (task - 0x80000000u));
     counts[site][type & 7]++;
-    if (site == 0 && counts[0][1] % 60 == 1) {
+    static const bool all = std::getenv("GT_TASKLOG")[0] == '2';
+    if (site == 0 && (all || counts[0][1] % 60 == 1)) {
         auto w = [&](uint32_t off) { return *reinterpret_cast<uint32_t*>(rdram + (task + off - 0x80000000u)); };
-        fprintf(stderr, "[gfxtask] ucode=%08X ucode_data=%08X data_ptr=%08X data_size=%08X yield=%08X\n", w(0x10), w(0x18), w(0x30), w(0x34), w(0x38));
+        fprintf(stderr, "[gfxtask] ucode=%08X data_ptr=%08X flags=%08X sc_flags=%08X fb=%08X\n", w(0x10), w(0x30), w(0x4), w(-0x28 + 0x1C), w(-0x28 + 0x20));
     }
     auto now = std::chrono::steady_clock::now();
     if (now - last > std::chrono::seconds(1)) {
@@ -75,5 +76,50 @@ extern "C" void gt_debug_swap(uint32_t fb) {
     if (unblack) osViBlack(0);
     static const bool on = std::getenv("GT_TASKLOG") != nullptr;
     static int n = 0;
-    if (on && (n++ % 60) == 0) fprintf(stderr, "[swap] n=%d fb=0x%08X\n", n, fb);
+    static const bool all = std::getenv("GT_TASKLOG") && std::getenv("GT_TASKLOG")[0] == '2';
+    if (on && (all || (n % 60) == 0)) fprintf(stderr, "[swap] n=%d fb=0x%08X\n", n, fb);
+    n++;
+}
+
+// Widescreen: the boot logos (licence, GT, Ocean, Imagineer) are 4:3 pictures whose full-screen fills reach past the
+// 4:3 frame with RT64's "Expand". While the game is in one of the logo modes, render at the original 4:3 aspect ratio
+// (pillarboxed) and switch back afterwards. Only the runtime's live setting changes; the saved setting is untouched.
+#include "ultramodern/config.hpp"
+#include "gt_game.h"
+
+namespace {
+    constexpr uint32_t mode_func_ptr = 0x800E8810;
+    constexpr uint32_t logo_modes[] = {
+        0x8000311C, 0x8000313C, 0x80003388, 0x800033D0, 0x80003400, 0x80003458, 0x800034A0, 0x800034F8, 0x80003540,
+    };
+    bool pillarboxed = false;
+}
+
+void gt::widescreen_on_vi() {
+    uint8_t* rdram = gt::game_rdram();
+    if (rdram == nullptr) {
+        return;
+    }
+    const uint32_t mode = *reinterpret_cast<uint32_t*>(rdram + (mode_func_ptr - 0x80000000u));
+    bool logo = false;
+    for (uint32_t m : logo_modes) {
+        logo |= (m == mode);
+    }
+
+    using namespace ultramodern::renderer;
+    const GraphicsConfig& current = get_graphics_config();
+    if (logo && !pillarboxed && current.ar_option == AspectRatio::Expand) {
+        GraphicsConfig config = current;
+        config.ar_option = AspectRatio::Original;
+        set_graphics_config(config);
+        pillarboxed = true;
+    }
+    else if (!logo && pillarboxed) {
+        if (current.ar_option == AspectRatio::Original) {
+            GraphicsConfig config = current;
+            config.ar_option = AspectRatio::Expand;
+            set_graphics_config(config);
+        }
+        pillarboxed = false;
+    }
 }

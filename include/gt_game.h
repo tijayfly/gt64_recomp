@@ -15,6 +15,8 @@ namespace gt {
     void stats_set_rdram(uint8_t* rdram);
     // Game RAM, once the renderer has been created (nullptr before).
     uint8_t* game_rdram();
+    // Every VI: pillarbox the 4:3 boot logos in widescreen (src/game/enhancements.cpp).
+    void widescreen_on_vi();
 }
 
 #endif

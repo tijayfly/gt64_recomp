@@ -55,6 +55,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-lookat-bounds.patch)
 # Keep game memory mapped at quit: the game's threads are never joined and crash if it's unmapped under them.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime ${CMAKE_SOURCE_DIR}/patches/deps/N64ModernRuntime-keep-rdram-on-quit.patch)
+# Present the framebuffer the VI switches to, not the one it leaves: tasks finish instantly, so the game can already be
+# drawing its next frame into the old one (flashing black or partly drawn frames in GT64's races and fades).
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime ${CMAKE_SOURCE_DIR}/patches/deps/N64ModernRuntime-screen-update-after-vi-swap.patch)
 # RecompFrontend never reads mouse buttons ("TODO mouse support"), so the default left/right mouse bindings for
 # shoot/aim did nothing. Read them alongside the keyboard state.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/RecompFrontend ${CMAKE_SOURCE_DIR}/patches/deps/RecompFrontend-mouse-buttons.patch)
