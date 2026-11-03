@@ -29,10 +29,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] ROM mapped: main code, one front-end code overlay, RSP microcodes
 - [x] libultra functions named (156), so the runtime can replace them
 - [x] Boots through the licence, logos, intro and title, with audio
-- [x] Menus, championship and time trial setup, races, pause menu
-- [x] HUD: rev counter needle and track map (rotated S2DEX sprites)
-- [x] Skies, including the intro's split-screen views
-- [x] Texture filtering as on the N64: sharp 2D (logos, menus, HUD), filtered sky
+- [x] Menus, championship and time trial setup, races, pause menu; logos and menus unfiltered, as on the N64
+- [x] HUD, unfiltered: rev counter needle and track map (rotated S2DEX sprites)
+- [x] Skies, filtered, including the intro's split-screen views
 - [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake, shoulders shift
 - [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
 - [x] Track seams: hairline cracks between polygons filled at high resolution, with or without MSAA
