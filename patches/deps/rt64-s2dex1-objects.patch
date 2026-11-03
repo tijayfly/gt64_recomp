@@ -1,5 +1,5 @@
 diff --git a/src/gbi/rt64_gbi_s2dex.cpp b/src/gbi/rt64_gbi_s2dex.cpp
-index 4b41bfa..cdf5934 100644
+index 4b41bfa..61aa587 100644
 --- a/src/gbi/rt64_gbi_s2dex.cpp
 +++ b/src/gbi/rt64_gbi_s2dex.cpp
 @@ -1,3 +1,5 @@
@@ -8,7 +8,7 @@ index 4b41bfa..cdf5934 100644
  //
  // RT64
  //
-@@ -139,6 +141,118 @@ namespace RT64 {
+@@ -139,6 +141,149 @@ namespace RT64 {
              const uObjBg_t &bg = bgObject->bg;
              const uObjScaleBg_t &scaleBg = bgObject->scaleBg;
  
@@ -34,7 +34,17 @@ index 4b41bfa..cdf5934 100644
 +                const uint32_t imageAddress = state->rsp->fromSegmented(scaleBg.imageAddress);
 +                uint32_t srcY = (uint32_t(scaleBg.imageY) >> 5) % texH;
 +                const uint16_t loadLrs = static_cast<uint16_t>(((lineBytes >> 1) - 1) << 2);
-+                const bool copyMode = (rdp->otherMode.cycleType() == G_CYC_COPY);
++                // Draw the sky in 1-cycle mode with a texture-only combiner instead of copy mode, so it can be filtered
++                // when upscaled (copy mode samples once per N64 pixel).
++                const bool gameCopyMode = (rdp->otherMode.cycleType() == G_CYC_COPY);
++                const bool filterSky = true;
++                const uint32_t savedOtherModeH = rdp->otherMode.H, savedOtherModeL = rdp->otherMode.L;
++                const uint64_t savedCombine = (uint64_t(rdp->colorCombinerStack[rdp->colorCombinerStackSize - 1].H) << 32) | rdp->colorCombinerStack[rdp->colorCombinerStackSize - 1].L;
++                if (gameCopyMode) {
++                    rdp->setOtherMode((savedOtherModeH & ~((3U << G_MDSFT_CYCLETYPE) | (3U << G_MDSFT_TEXTFILT))) | G_CYC_1CYCLE | G_TF_BILERP, 0x0F0A4000); // G_RM_OPA_SURF, G_RM_OPA_SURF2
++                    rdp->setCombine(0xFFFCF279FCFFFFFFULL); // G_CC_DECALRGBA, G_CC_DECALRGBA (RT64 keeps the command's first word in L)
++                }
++                const bool copyMode = false;
 +                const int16_t dsdx = int16_t(scaleBg.scaleW) * (copyMode ? 4 : 1);
 +                int16_t dtdy = int16_t(scaleBg.scaleH);
 +                double texelsW = frameW * scaleX;
@@ -63,8 +73,11 @@ index 4b41bfa..cdf5934 100644
 +                    // otherwise be stretched across the widescreen area.
 +                    adjustAspect = true;
 +                }
-+                // The sky belongs to the 3D view: keep it out of the card remap.
++                // The sky belongs to the 3D view: keep it out of the card remap, and filter it (it's drawn in copy mode or
++                // with point sampling, which shows its pixels when upscaled).
 +                rdp->noCardRemap = true;
++                const uint8_t savedBilerp = rdp->extended.drawExtendedFlags.forceTrueBilerp;
++                rdp->forceTrueBilerp(G_EX_BILERP_ALL);
 +                const uint8_t savedAspect = rdp->extended.global.rectAspect;
 +                if (adjustAspect) {
 +                    rdp->extended.global.rectAspect = G_EX_ASPECT_ADJUST;
@@ -86,10 +99,17 @@ index 4b41bfa..cdf5934 100644
 +                while (row < texelsH) {
 +                    // Image rows in this band: limited by TMEM, the rest of the frame and the bottom of the image (wrap).
 +                    const uint32_t rowsLeft = uint32_t(std::ceil(texelsH - row));
-+                    const uint32_t lines = std::min<uint32_t>({ bandLines, rowsLeft, texH - srcY });
-+                    rdp->setTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, uint16_t(lineBytes >> 1), imageAddress + srcY * lineBytes);
-+                    rdp->loadTile(G_TX_LOADTILE, 0, 0, loadLrs, static_cast<uint16_t>((lines - 1) << 2));
-+                    rdp->setTileSize(G_TX_RENDERTILE, 0, 0, static_cast<uint16_t>((texW - 1) << 2), static_cast<uint16_t>((lines - 1) << 2));
++                    // When filtering, each band also loads the image row above and below the rows it draws, so the filter
++                    // blends across band seams instead of clamping at them.
++                    const bool overlap = filterSky && (bandLines >= 3);
++                    const uint32_t lines = std::min<uint32_t>({ overlap ? bandLines - 2 : bandLines, rowsLeft, texH - srcY });
++                    const uint32_t loadStart = (overlap && (srcY > 0)) ? srcY - 1 : srcY;
++                    const uint32_t loadEnd = overlap ? std::min(srcY + lines, texH - 1) : srcY + lines - 1;
++                    const uint32_t loadLines = loadEnd - loadStart + 1;
++                    const int16_t bandT = int16_t((srcY - loadStart) << 5);
++                    rdp->setTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, uint16_t(lineBytes >> 1), imageAddress + loadStart * lineBytes);
++                    rdp->loadTile(G_TX_LOADTILE, 0, 0, loadLrs, static_cast<uint16_t>((loadLines - 1) << 2));
++                    rdp->setTileSize(G_TX_RENDERTILE, 0, 0, static_cast<uint16_t>((texW - 1) << 2), static_cast<uint16_t>((loadLines - 1) << 2));
 +
 +                    auto drawRow = [&](double y0, double y1, int16_t dt) {
 +                        double texel = 0.0;
@@ -104,7 +124,13 @@ index 4b41bfa..cdf5934 100644
 +                                lry -= 4;
 +                            }
 +                            if ((lrx > q(x0)) && (lry > q(y0))) {
-+                                rdp->drawTexRect(q(x0), q(y0), lrx, lry, G_TX_RENDERTILE, int16_t(srcX << 5), 0, dsdx, dt, false);
++                                rdp->drawTexRect(q(x0), q(y0), lrx, lry, G_TX_RENDERTILE, int16_t(srcX << 5), bandT, dsdx, dt, false);
++                                if (overlap) {
++                                    // Decode the whole band (with its extra rows) and a texel either side for the filter;
++                                    // RT64 only decodes the area a rectangle's texture coordinates cover.
++                                    rdp->updateCallTexcoords(float(std::max<int>(int(srcX) - 1, 0)), 0.0f);
++                                    rdp->updateCallTexcoords(float(std::min<double>(srcX + tw + 1.0, texW)), float(loadLines));
++                                }
 +                            }
 +                            texel += tw;
 +                            srcX = 0;
@@ -118,6 +144,11 @@ index 4b41bfa..cdf5934 100644
 +                state->endSpriteCommand();
 +                rdp->extended.global.rectAspect = savedAspect;
 +                rdp->noCardRemap = false;
++                rdp->forceTrueBilerp(savedBilerp);
++                if (gameCopyMode) {
++                    rdp->setOtherMode(savedOtherModeH, savedOtherModeL);
++                    rdp->setCombine(savedCombine);
++                }
 +                if (adjustAspect) {
 +                    rdp->popScissor();
 +                }
@@ -127,14 +158,16 @@ index 4b41bfa..cdf5934 100644
              // Validate the image loading method is one of the two supported methods. It's worth noting 
              // that despite the load block method being documented, it doesn't actually work in the retail
              // microcode and it should therefore be treated as load tile as well.
-@@ -413,8 +527,42 @@ namespace RT64 {
+@@ -413,8 +558,44 @@ namespace RT64 {
              const uObjBg *bgObject = reinterpret_cast<const uObjBg *>(state->fromRDRAM(rdramAddress));
              const uObjBg_t &bg = bgObject->bg;
              assert(bg.imageLoad == S2DEX_G_BGLT_LOADTILE); // TODO: Only the load tile version is implemented.
 +            // Panoramas wider than their frame are GT64's skies, part of the 3D view: keep them out of the card remap.
-+            struct RemapGuard { RDP *rdp; bool saved; ~RemapGuard() { rdp->noCardRemap = saved; } } remapGuard{ rdp, rdp->noCardRemap };
++            struct RemapGuard { RDP *rdp; bool saved; uint8_t savedBilerp; bool sky; ~RemapGuard() { rdp->noCardRemap = saved; if (sky) rdp->forceTrueBilerp(savedBilerp); } } remapGuard{ rdp, rdp->noCardRemap, uint8_t(rdp->extended.drawExtendedFlags.forceTrueBilerp), false };
 +            if (bg.imageW > bg.frameW + 4) {
 +                rdp->noCardRemap = true;
++                remapGuard.sky = true;
++                rdp->forceTrueBilerp(G_EX_BILERP_ALL);
 +            }
              
              const uint16_t TMEMAddress = 0;
@@ -170,7 +203,7 @@ index 4b41bfa..cdf5934 100644
              const uint8_t lineShiftOffset = (bg.imageSiz == G_IM_SIZ_32b) ? 1 : 0;
              const uint16_t bgLine = bg.imageW >> (2 + bg.imageSiz - lineShiftOffset);
              const uint16_t dsdx = 4 << 10;
-@@ -546,6 +694,211 @@ namespace RT64 {
+@@ -546,6 +727,211 @@ namespace RT64 {
              }
          }
  
@@ -382,7 +415,7 @@ index 4b41bfa..cdf5934 100644
          void objLoadTxtr(State *state, DisplayList **dl) {
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxtr::start(0x%08X)", (*dl)->w1);
-@@ -573,8 +926,7 @@ namespace RT64 {
+@@ -573,8 +959,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the sprite draw
@@ -392,7 +425,7 @@ index 4b41bfa..cdf5934 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxSprite::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -592,8 +944,7 @@ namespace RT64 {
+@@ -592,8 +977,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect draw
@@ -402,7 +435,7 @@ index 4b41bfa..cdf5934 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRect::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -611,8 +962,7 @@ namespace RT64 {
+@@ -611,8 +995,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect r draw
@@ -412,7 +445,7 @@ index 4b41bfa..cdf5934 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRectR::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -620,6 +970,12 @@ namespace RT64 {
+@@ -620,6 +1003,12 @@ namespace RT64 {
  
          void reset(State *state) {
              state->rsp->objRenderMode = 0x0;
@@ -425,7 +458,7 @@ index 4b41bfa..cdf5934 100644
          }
  
          void setup(GBI *gbi) {
-@@ -645,6 +1001,9 @@ namespace RT64 {
+@@ -645,6 +1034,9 @@ namespace RT64 {
              gbi->map[S2DEX_G_OBJ_LDTX_SPRITE] = &objLoadTxSprite;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT] = &objLoadTxRect;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT_R] = &objLoadTxRectR;

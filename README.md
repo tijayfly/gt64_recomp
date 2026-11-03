@@ -45,7 +45,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Full-frame 4:3 screens.** The logos, title and menus are laid out in a 288x208 box inside a black border. They
   are stretched to fill the 4:3 frame and pillarboxed. The switch between pillarbox and widescreen happens on black
   frames, so going into and out of races is clean.
-- **Sharp 2D.** Logos, menus and HUD are drawn with point sampling instead of bilinear filtering.
+- **Sharp 2D, smooth sky.** Logos, menus and HUD are drawn with point sampling instead of bilinear filtering; the
+  sky is filtered when upscaled.
+- **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **30 FPS, like the original.** The game times some things by frame, so races and the intro ran too fast at
   60 FPS, and RT64's frame interpolation flashed blue: the frame rate and refresh rate options are fixed to Original

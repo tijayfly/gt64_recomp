@@ -108,6 +108,42 @@ index 84f4e7c..1029afa 100644
          int32_t convertK[6];
          hlslpp::float3 keyCenter;
          hlslpp::float3 keyScale;
+diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
+index 2970e71..2e612f8 100644
+--- a/src/hle/rt64_state.cpp
++++ b/src/hle/rt64_state.cpp
+@@ -476,6 +476,31 @@ namespace RT64 {
+         // Add the draw call to the FB pair.
+         GameCall gameCall;
+         gameCall.callDesc = drawCall;
++        // GT64's car shadows: a 48x48 4-bit texture on the car models' (NoN) task, drawn opaque with point sampling.
++        // Filter them and blend them at about half strength: the combiner's alpha becomes TEXEL0 * PRIM (the colour,
++        // TEXEL0 * SHADE, doesn't use PRIM) and the render mode Z-buffered translucent surface.
++        static const bool gtCarShadows = (getenv("GT_NO_SHADOW_FIX") == nullptr);
++        if (gtCarShadows && !rdp->s2dTask && rsp->NoN && drawCall.textureOn && (drawCall.colorCombiner.L == 0xFC127E24) &&
++            (drawCall.colorCombiner.H == 0xFFFFF3F9) && (drawCall.otherMode.L == 0x00553078)) {
++            // The draw's own tile (the RDP's tiles may already hold the next draw's).
++            const LoadTile &tile = workload.drawData.callTiles[drawCall.tileIndex].loadTile;
++            const int tileW = (tile.lrs >> 2) - (tile.uls >> 2) + 1, tileH = (tile.lrt >> 2) - (tile.ult >> 2) + 1;
++            if ((tileW == 48) && (tileH == 48) && (tile.fmt == G_IM_FMT_CI) && (tile.siz == G_IM_SIZ_4b)) {
++                // Alpha a/b/c/d = TEXEL0, 0, PRIM, 0 in both cycles (H holds Ab0, Ad0, Ab1, Ad1; L holds Aa0, Ac0).
++                uint32_t ccL = drawCall.colorCombiner.L, ccH = drawCall.colorCombiner.H;
++                ccL = (ccL & ~(0x3FU << 9)) | (1U << 12) | (3U << 9);
++                ccH = (ccH & ~((0x3FU << 18) | (0x7U << 12) | (0x7U << 9) | (0x3FU << 0))) |
++                    (1U << 21) | (3U << 18) | (7U << 12) | (7U << 9) | (7U << 3) | (7U << 0);
++                // Only this call's copy: the draw state carries over to the following calls.
++                DrawCall &shadowCall = gameCall.callDesc;
++                shadowCall.colorCombiner.L = ccL;
++                shadowCall.colorCombiner.H = ccH;
++                shadowCall.otherMode.L = 0x00504B50; // G_RM_ZB_XLU_SURF, G_RM_ZB_XLU_SURF2
++                shadowCall.rdpParams.primColor.w = 0.55f;
++                shadowCall.extendedFlags.forceTrueBilerp = G_EX_BILERP_ALL;
++            }
++        }
++
+         fbPair.addGameCall(gameCall);
+ 
+         // Assign the indices or increase the count of the active sprite command if it exists.
 diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
 index a870166..96ba52f 100644
 --- a/src/hle/rt64_vi.cpp

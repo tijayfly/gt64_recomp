@@ -77,7 +77,7 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # sky out to the window's edges and makes the fade grid cover the frame) and for its "card" screens (2D tasks remapped
 # from the 288x208 box at (16, 16) to the full frame); one-pixel-short full-screen scissors widened (a line at the
 # right edge); fixRectLR only ever extending rects (it left gaps between wrapped sky pieces); 2D (S2DEX) rectangles
-# and sprites drawn with point sampling.
+# and sprites drawn with point sampling; filtered, half-strength car shadows.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-full-frame-view.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
