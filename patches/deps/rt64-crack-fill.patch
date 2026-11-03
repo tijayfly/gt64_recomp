@@ -1,12 +1,15 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index f6864ff..51aa31e 100644
+index f6864ff..bb76dbb 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -562,6 +562,7 @@ build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/R
+@@ -562,6 +562,10 @@ build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/R
  build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/RtCopyDepthToColor4XPS.hlsl" "-D SAMPLES_4X")
  build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/RtCopyDepthToColor8XPS.hlsl" "-D SAMPLES_8X")
  build_pixel_shader(  rt64 "src/shaders/TextureCopyPS.hlsl")
 +build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl")
++build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill2XPS.hlsl" "-D SAMPLES_2X")
++build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill4XPS.hlsl" "-D SAMPLES_4X")
++build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill8XPS.hlsl" "-D SAMPLES_8X")
  build_compute_shader(rt64 "src/shaders/TextureDecodeCS.hlsl")
  build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples2XPS.hlsl" "-D SAMPLES_2X")
  build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples4XPS.hlsl" "-D SAMPLES_4X")
@@ -38,10 +41,10 @@ index 69a82ac..f878f58 100644
          uint32_t TMEM;
          uint32_t RGBA32;
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index 06b4577..7edddd6 100644
+index 06b4577..4532b7c 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
-@@ -1299,6 +1299,46 @@ namespace RT64 {
+@@ -1299,6 +1299,47 @@ namespace RT64 {
                  submitRasterScene(worker, framebuffer, targetDrawCall.fbStorage, rasterScene, depthState);
              }
          }
@@ -77,8 +80,9 @@ index 06b4577..7edddd6 100644
 +            commandList->setFramebuffer(colorTarget->textureFramebuffer.get());
 +            commandList->setViewports(viewport);
 +            commandList->setScissors(scissor);
-+            commandList->setPipeline(shaderLibrary->crackFill.pipeline.get());
-+            commandList->setGraphicsPipelineLayout(shaderLibrary->crackFill.pipelineLayout.get());
++            const ShaderRecord &crackFillShader = (colorTarget->multisampling.sampleCount > 1) ? shaderLibrary->crackFillMS : shaderLibrary->crackFill;
++            commandList->setPipeline(crackFillShader.pipeline.get());
++            commandList->setGraphicsPipelineLayout(crackFillShader.pipelineLayout.get());
 +            commandList->setGraphicsDescriptorSet(framebuffer.crackFillSet->get(), 0);
 +            commandList->setGraphicsPushConstants(0, &pushConstants);
 +            commandList->setVertexBuffers(0, nullptr, 0, nullptr);
@@ -88,22 +92,28 @@ index 06b4577..7edddd6 100644
      }
  
      void FramebufferRenderer::waitForUploaders() {
-@@ -1429,6 +1469,41 @@ namespace RT64 {
+@@ -1429,6 +1470,47 @@ namespace RT64 {
  #   endif
  
          targetDrawCall.fbStorage = p.fbStorage;
 +
-+        // Crack fill (see CrackFillPS.hlsl): only for single-sampled colour targets drawn with depth writes this frame.
++        // Crack fill (see CrackFillPS.hlsl): for colour targets drawn with depth writes this frame.
 +        {
 +            static const bool crackFillDisabled = (getenv("GT_NO_CRACK_FILL") != nullptr);
 +            RenderTarget *colorTarget = p.fbStorage->colorTarget;
 +            RenderTarget *depthTarget = p.fbStorage->depthTarget;
 +            framebuffer.crackFill = !crackFillDisabled && (colorTarget != nullptr) && (depthTarget != nullptr) && fbPair.depthWrite &&
-+                (colorTarget->multisampling.sampleCount <= 1) && (depthTarget->multisampling.sampleCount <= 1) &&
++                (colorTarget->multisampling.sampleCount == depthTarget->multisampling.sampleCount) &&
 +                (colorTarget->width == depthTarget->width) && (colorTarget->height == depthTarget->height);
++            const bool crackFillMS = (colorTarget != nullptr) && (colorTarget->multisampling.sampleCount > 1);
++            if (framebuffer.crackFill && crackFillMS && (shaderLibrary->crackFillMS.pipeline == nullptr)) {
++                framebuffer.crackFill = false;
++            }
 +            if (framebuffer.crackFill) {
-+                if ((crackFillCopy == nullptr) || (crackFillCopyWidth != colorTarget->width) || (crackFillCopyHeight != colorTarget->height) || (crackFillCopyFormat != colorTarget->format)) {
-+                    crackFillCopy = p.worker->device->createTexture(RenderTextureDesc::ColorTarget(colorTarget->width, colorTarget->height, colorTarget->format));
++                if ((crackFillCopy == nullptr) || (crackFillCopyWidth != colorTarget->width) || (crackFillCopyHeight != colorTarget->height) || (crackFillCopyFormat != colorTarget->format) ||
++                    (crackFillCopySamples != colorTarget->multisampling.sampleCount)) {
++                    crackFillCopy = p.worker->device->createTexture(RenderTextureDesc::ColorTarget(colorTarget->width, colorTarget->height, colorTarget->format, colorTarget->multisampling));
++                    crackFillCopySamples = colorTarget->multisampling.sampleCount;
 +                    crackFillCopyWidth = colorTarget->width;
 +                    crackFillCopyHeight = colorTarget->height;
 +                    crackFillCopyFormat = colorTarget->format;
@@ -131,10 +141,10 @@ index 06b4577..7edddd6 100644
  
          const float SimilarityPercentage = 0.1f; // TODO: Make more strict once VI ratios are in.
 diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
-index 3add9c3..ff069dc 100644
+index 3add9c3..494315c 100644
 --- a/src/render/rt64_framebuffer_renderer.h
 +++ b/src/render/rt64_framebuffer_renderer.h
-@@ -118,8 +118,19 @@ namespace RT64 {
+@@ -118,8 +118,20 @@ namespace RT64 {
              std::set<RenderTarget *> transitionRenderTargetSet;
              RenderTargetDrawCall renderTargetDrawCall;
              RenderViewport viewport;
@@ -150,39 +160,49 @@ index 3add9c3..ff069dc 100644
 +        uint32_t crackFillCopyWidth = 0;
 +        uint32_t crackFillCopyHeight = 0;
 +        RenderFormat crackFillCopyFormat = RenderFormat::UNKNOWN;
++        uint32_t crackFillCopySamples = 0;
 +
          std::vector<Framebuffer> framebufferVector;
          std::vector<BufferUploader *> pendingUploaders;
          uint32_t framebufferCount = 0;
 diff --git a/src/render/rt64_shader_library.cpp b/src/render/rt64_shader_library.cpp
-index d1c5273..c653f18 100644
+index d1c5273..39c63e5 100644
 --- a/src/render/rt64_shader_library.cpp
 +++ b/src/render/rt64_shader_library.cpp
-@@ -40,6 +40,7 @@
+@@ -40,6 +40,10 @@
  #include "shaders/RtCopyDepthToColor4XPS.hlsl.spirv.h"
  #include "shaders/RtCopyDepthToColor8XPS.hlsl.spirv.h"
  #include "shaders/TextureCopyPS.hlsl.spirv.h"
 +#include "shaders/CrackFillPS.hlsl.spirv.h"
++#include "shaders/CrackFill2XPS.hlsl.spirv.h"
++#include "shaders/CrackFill4XPS.hlsl.spirv.h"
++#include "shaders/CrackFill8XPS.hlsl.spirv.h"
  #include "shaders/TextureDecodeCS.hlsl.spirv.h"
  #include "shaders/TextureResolveSamples2XPS.hlsl.spirv.h"
  #include "shaders/TextureResolveSamples4XPS.hlsl.spirv.h"
-@@ -86,6 +87,7 @@
+@@ -86,6 +90,10 @@
  #   include "shaders/RtCopyDepthToColor4XPS.hlsl.dxil.h"
  #   include "shaders/RtCopyDepthToColor8XPS.hlsl.dxil.h"
  #   include "shaders/TextureCopyPS.hlsl.dxil.h"
 +#   include "shaders/CrackFillPS.hlsl.dxil.h"
++#   include "shaders/CrackFill2XPS.hlsl.dxil.h"
++#   include "shaders/CrackFill4XPS.hlsl.dxil.h"
++#   include "shaders/CrackFill8XPS.hlsl.dxil.h"
  #   include "shaders/TextureDecodeCS.hlsl.dxil.h"
  #   include "shaders/TextureResolveSamples2XPS.hlsl.dxil.h"
  #   include "shaders/TextureResolveSamples4XPS.hlsl.dxil.h"
-@@ -131,6 +133,7 @@
+@@ -131,6 +139,10 @@
  #   include "shaders/RtCopyDepthToColor4XPS.hlsl.metal.h"
  #   include "shaders/RtCopyDepthToColor8XPS.hlsl.metal.h"
  #   include "shaders/TextureCopyPS.hlsl.metal.h"
 +#   include "shaders/CrackFillPS.hlsl.metal.h"
++#   include "shaders/CrackFill2XPS.hlsl.metal.h"
++#   include "shaders/CrackFill4XPS.hlsl.metal.h"
++#   include "shaders/CrackFill8XPS.hlsl.metal.h"
  #   include "shaders/TextureDecodeCS.hlsl.metal.h"
  #   include "shaders/TextureResolveSamples2XPS.hlsl.metal.h"
  #   include "shaders/TextureResolveSamples4XPS.hlsl.metal.h"
-@@ -569,6 +572,26 @@ namespace RT64 {
+@@ -569,6 +581,27 @@ namespace RT64 {
              textureCopy.pipeline = device->createGraphicsPipeline(pipelineDesc);
          }
  
@@ -204,29 +224,141 @@ index d1c5273..c653f18 100644
 +            pipelineDesc.vertexShader = fullScreenVertexShader.get();
 +            pipelineDesc.pixelShader = pixelShader.get();
 +            crackFill.pipeline = device->createGraphicsPipeline(pipelineDesc);
++            crackFillMS.pipelineLayout = layoutBuilder.create(device);
 +        }
 +
          // Texture Decode.
          {
              TextureDecodeDescriptorSet descriptorSet;
+@@ -638,6 +671,8 @@ namespace RT64 {
+         const void *TextureResolvePSBlob = nullptr;
+         const void *RtCopyDepthToColorPSBlob = nullptr;
+         const void *RtCopyDepthToColorPSMSBlob = nullptr;
++        const void *CrackFillPSMSBlob = nullptr;
++        uint32_t CrackFillPSMSBlobSize = 0;
+         const void *RtCopyColorToDepthPSBlob = nullptr;
+         const void *RtCopyColorToDepthPSMSBlob = nullptr;
+         uint32_t TextureResolvePSBlobSize = 0;
+@@ -658,6 +693,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples2XPSBlobDXIL);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor2XPSBlobDXIL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobDXIL);
++                CrackFillPSMSBlob = CrackFill2XPSBlobDXIL;
++                CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobDXIL);
+                 break;
+@@ -666,6 +703,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples4XPSBlobDXIL);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor4XPSBlobDXIL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobDXIL);
++                CrackFillPSMSBlob = CrackFill4XPSBlobDXIL;
++                CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobDXIL);
+                 break;
+@@ -674,6 +713,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples8XPSBlobDXIL);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor8XPSBlobDXIL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobDXIL);
++                CrackFillPSMSBlob = CrackFill8XPSBlobDXIL;
++                CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobDXIL);
+                 break;
+@@ -694,6 +735,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples2XPSBlobMSL);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor2XPSBlobMSL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobMSL);
++                CrackFillPSMSBlob = CrackFill2XPSBlobMSL;
++                CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobMSL);
+                 break;
+@@ -702,6 +745,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples4XPSBlobMSL);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor4XPSBlobMSL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobMSL);
++                CrackFillPSMSBlob = CrackFill4XPSBlobMSL;
++                CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobMSL);
+                 break;
+@@ -710,6 +755,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples8XPSBlobMSL);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor8XPSBlobMSL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobMSL);
++                CrackFillPSMSBlob = CrackFill8XPSBlobMSL;
++                CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobMSL);
+                 break;
+@@ -729,6 +776,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples2XPSBlobSPIRV);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor2XPSBlobSPIRV;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobSPIRV);
++                CrackFillPSMSBlob = CrackFill2XPSBlobSPIRV;
++                CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobSPIRV);
+                 break;
+@@ -737,6 +786,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples4XPSBlobSPIRV);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor4XPSBlobSPIRV;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobSPIRV);
++                CrackFillPSMSBlob = CrackFill4XPSBlobSPIRV;
++                CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobSPIRV);
+                 break;
+@@ -745,6 +796,8 @@ namespace RT64 {
+                 TextureResolvePSBlobSize = std::size(TextureResolveSamples8XPSBlobSPIRV);
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor8XPSBlobSPIRV;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobSPIRV);
++                CrackFillPSMSBlob = CrackFill8XPSBlobSPIRV;
++                CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobSPIRV);
+                 break;
+@@ -807,6 +860,19 @@ namespace RT64 {
+             pipelineDesc.pixelShader = depthToColorShader.get();
+             rtCopyDepthToColor.pipeline = device->createGraphicsPipeline(pipelineDesc);
+ 
++            if ((CrackFillPSMSBlob != nullptr) && (crackFillMS.pipelineLayout != nullptr)) {
++                std::unique_ptr<RenderShader> crackFillMSShader = device->createShader(CrackFillPSMSBlob, CrackFillPSMSBlobSize, "PSMain", shaderFormat);
++                RenderGraphicsPipelineDesc crackFillDesc;
++                crackFillDesc.pipelineLayout = crackFillMS.pipelineLayout.get();
++                crackFillDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
++                crackFillDesc.renderTargetFormat[0] = RenderTarget::colorBufferFormat(usesHDR);
++                crackFillDesc.renderTargetCount = 1;
++                crackFillDesc.vertexShader = fullScreenVertexShader.get();
++                crackFillDesc.pixelShader = crackFillMSShader.get();
++                crackFillDesc.multisampling = multisampling;
++                crackFillMS.pipeline = device->createGraphicsPipeline(crackFillDesc);
++            }
++
+             if (RtCopyDepthToColorPSMSBlob != nullptr) {
+                 std::unique_ptr<RenderShader> depthToColorMSShader = device->createShader(RtCopyDepthToColorPSMSBlob, RtCopyDepthToColorPSMSBlobSize, "PSMain", shaderFormat);
+                 pipelineDesc.pixelShader = depthToColorMSShader.get();
 diff --git a/src/render/rt64_shader_library.h b/src/render/rt64_shader_library.h
-index 641f3ec..2e436ec 100644
+index 641f3ec..cc1eeb7 100644
 --- a/src/render/rt64_shader_library.h
 +++ b/src/render/rt64_shader_library.h
-@@ -53,6 +53,7 @@ namespace RT64 {
+@@ -53,6 +53,8 @@ namespace RT64 {
          ShaderRecord rtCopyDepthToColorMS;
          ShaderRecord textureDecode;
          ShaderRecord textureCopy;
 +        ShaderRecord crackFill;
++        ShaderRecord crackFillMS;
          ShaderRecord textureResolve;
          ShaderRecord videoInterfaceLinear;
          ShaderRecord videoInterfaceNearest;
 diff --git a/src/shaders/CrackFillPS.hlsl b/src/shaders/CrackFillPS.hlsl
 new file mode 100644
-index 0000000..521cf70
+index 0000000..0f8f3ea
 --- /dev/null
 +++ b/src/shaders/CrackFillPS.hlsl
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,111 @@
 +//
 +// RT64
 +//
@@ -244,6 +376,41 @@ index 0000000..521cf70
 +};
 +
 +[[vk::push_constant]] ConstantBuffer<CrackFillCB> gConstants : register(b0);
++
++#if defined(SAMPLES_8X)
++#   define SAMPLE_COUNT 8
++#elif defined(SAMPLES_4X)
++#   define SAMPLE_COUNT 4
++#elif defined(SAMPLES_2X)
++#   define SAMPLE_COUNT 2
++#endif
++
++#ifdef SAMPLE_COUNT
++// With MSAA a crack only covers some of a pixel's samples: use the farthest sample's depth (the crack) and fill the
++// whole pixel with the average of the neighbours' samples.
++Texture2DMS<float4> gColor : register(t1);
++Texture2DMS<float> gDepth : register(t2);
++
++float depthAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    float d = 0.0f;
++    for (uint i = 0; i < SAMPLE_COUNT; i++) {
++        d = max(d, gDepth.Load(p, i));
++    }
++
++    return d;
++}
++
++float4 colorAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    float4 c = float4(0.0f, 0.0f, 0.0f, 0.0f);
++    for (uint i = 0; i < SAMPLE_COUNT; i++) {
++        c += gColor.Load(p, i);
++    }
++
++    return c / float(SAMPLE_COUNT);
++}
++#else
 +Texture2D<float4> gColor : register(t1);
 +Texture2D<float> gDepth : register(t2);
 +
@@ -256,6 +423,7 @@ index 0000000..521cf70
 +    p = clamp(p, int2(0, 0), gConstants.size - 1);
 +    return gColor.Load(int3(p, 0));
 +}
++#endif
 +
 +float4 PSMain(in float4 pos : SV_Position, in float2 uv : TEXCOORD0) : SV_TARGET {
 +    const int2 p = int2(pos.xy);
