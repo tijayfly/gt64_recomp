@@ -1,8 +1,77 @@
 diff --git a/src/gbi/rt64_gbi_s2dex.cpp b/src/gbi/rt64_gbi_s2dex.cpp
-index 4b41bfa..9099483 100644
+index 4b41bfa..51e9ba4 100644
 --- a/src/gbi/rt64_gbi_s2dex.cpp
 +++ b/src/gbi/rt64_gbi_s2dex.cpp
-@@ -415,6 +415,35 @@ namespace RT64 {
+@@ -1,3 +1,4 @@
++#include <algorithm>
+ //
+ // RT64
+ //
+@@ -139,6 +140,63 @@ namespace RT64 {
+             const uObjBg_t &bg = bgObject->bg;
+             const uObjScaleBg_t &scaleBg = bgObject->scaleBg;
+ 
++            // Unscaled 4/8-bit backgrounds (GT64's scrolling sky panoramas, CI8 and wider than the frame): load whole
++            // image rows as 16-bit texels in TMEM-sized bands and draw each band at the scroll offset, wrapping like
++            // the microcode. The general path below drew these with garbled rows.
++            if ((scaleBg.scaleW == 0x400) && (scaleBg.scaleH == 0x400) && (scaleBg.imageSiz < G_IM_SIZ_16b) && (scaleBg.imageFlip == 0)) {
++                const uint32_t texW = scaleBg.imageW >> 2;
++                const uint32_t texH = scaleBg.imageH >> 2;
++                const int32_t frameW = scaleBg.frameW >> 2;
++                const int32_t frameH = scaleBg.frameH >> 2;
++                if ((texW == 0) || (texH == 0) || (frameW <= 0) || (frameH <= 0)) {
++                    return;
++                }
++
++                const uint32_t lineBytes = (texW << scaleBg.imageSiz) >> 1;
++                const uint16_t line = static_cast<uint16_t>((lineBytes + 7) >> 3);
++                const uint32_t tmemBytes = (scaleBg.imageFmt == G_IM_FMT_CI) ? 2048 : 4096;
++                const uint32_t bandLines = std::max<uint32_t>(tmemBytes / (uint32_t(line) << 3), 1);
++                const uint32_t imageAddress = state->rsp->fromSegmented(scaleBg.imageAddress);
++                const uint32_t srcX0 = (uint32_t(scaleBg.imageX) >> 5) % texW;
++                uint32_t srcY = (uint32_t(scaleBg.imageY) >> 5) % texH;
++                const uint16_t loadLrs = static_cast<uint16_t>(((lineBytes >> 1) - 1) << 2);
++
++                rdp->setTile(G_TX_LOADTILE, G_IM_FMT_RGBA, G_IM_SIZ_16b, line, 0, 0, 0, 0, 0, 0, 0, 0);
++                rdp->setTile(G_TX_RENDERTILE, scaleBg.imageFmt, scaleBg.imageSiz, line, 0, uint8_t(scaleBg.imagePal), 0, 0, 0, 0, 0, 0);
++                state->startSpriteCommand(0);
++                int32_t y = 0;
++                while (y < frameH) {
++                    // Rows in this band: limited by TMEM, the rest of the frame and the bottom of the image (wrap).
++                    const uint32_t lines = std::min<uint32_t>({ bandLines, uint32_t(frameH - y), texH - srcY });
++                    rdp->setTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, uint16_t(lineBytes >> 1), imageAddress + srcY * lineBytes);
++                    rdp->loadTile(G_TX_LOADTILE, 0, 0, loadLrs, static_cast<uint16_t>((lines - 1) << 2));
++                    rdp->setTileSize(G_TX_RENDERTILE, 0, 0, static_cast<uint16_t>((texW - 1) << 2), static_cast<uint16_t>((lines - 1) << 2));
++
++                    const int32_t uly = scaleBg.frameY + (y << 2);
++                    const int32_t lry = uly + int32_t(lines << 2);
++                    // Horizontally: from srcX0 to the right edge of the image, then wrap to its left edge.
++                    int32_t x = 0;
++                    uint32_t srcX = srcX0;
++                    while (x < frameW) {
++                        const int32_t w = std::min<int32_t>(frameW - x, int32_t(texW - srcX));
++                        const int32_t ulx = scaleBg.frameX + (x << 2);
++                        if (rdp->otherMode.cycleType() == G_CYC_COPY) {
++                            rdp->drawTexRect(ulx, uly, ulx + (w << 2) - 4, lry - 4, G_TX_RENDERTILE, int16_t(srcX << 5), 0, 4 << 10, 1 << 10, false);
++                        }
++                        else {
++                            rdp->drawTexRect(ulx, uly, ulx + (w << 2), lry, G_TX_RENDERTILE, int16_t(srcX << 5), 0, 1 << 10, 1 << 10, false);
++                        }
++                        x += w;
++                        srcX = 0;
++                    }
++
++                    y += int32_t(lines);
++                    srcY = (srcY + lines) % texH;
++                }
++                state->endSpriteCommand();
++                return;
++            }
++
+             // Validate the image loading method is one of the two supported methods. It's worth noting 
+             // that despite the load block method being documented, it doesn't actually work in the retail
+             // microcode and it should therefore be treated as load tile as well.
+@@ -415,6 +473,35 @@ namespace RT64 {
              assert(bg.imageLoad == S2DEX_G_BGLT_LOADTILE); // TODO: Only the load tile version is implemented.
              
              const uint16_t TMEMAddress = 0;
@@ -38,7 +107,7 @@ index 4b41bfa..9099483 100644
              const uint8_t lineShiftOffset = (bg.imageSiz == G_IM_SIZ_32b) ? 1 : 0;
              const uint16_t bgLine = bg.imageW >> (2 + bg.imageSiz - lineShiftOffset);
              const uint16_t dsdx = 4 << 10;
-@@ -546,6 +575,126 @@ namespace RT64 {
+@@ -546,6 +633,126 @@ namespace RT64 {
              }
          }
  
@@ -165,7 +234,7 @@ index 4b41bfa..9099483 100644
          void objLoadTxtr(State *state, DisplayList **dl) {
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxtr::start(0x%08X)", (*dl)->w1);
-@@ -573,8 +722,7 @@ namespace RT64 {
+@@ -573,8 +780,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the sprite draw
@@ -175,7 +244,7 @@ index 4b41bfa..9099483 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxSprite::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -592,8 +740,7 @@ namespace RT64 {
+@@ -592,8 +798,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect draw
@@ -185,7 +254,7 @@ index 4b41bfa..9099483 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRect::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -611,8 +758,7 @@ namespace RT64 {
+@@ -611,8 +816,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect r draw
@@ -195,7 +264,20 @@ index 4b41bfa..9099483 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRectR::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -645,6 +791,9 @@ namespace RT64 {
+@@ -620,6 +824,12 @@ namespace RT64 {
+ 
+         void reset(State *state) {
+             state->rsp->objRenderMode = 0x0;
++
++            // The sid/flag/mask statuses G_OBJ_LOADTXTR uses to skip repeated loads live in DMEM, which the microcode
++            // initializes at the start of every task. Kept across tasks, a load would be skipped although TMEM has been
++            // overwritten since (GT64's sky palettes were stale: wrong colors).
++            state->rsp->S2D.statuses.fill(0xFFFFFFFF);
++            state->rsp->S2D.data_02AE = 0;
+         }
+ 
+         void setup(GBI *gbi) {
+@@ -645,6 +855,9 @@ namespace RT64 {
              gbi->map[S2DEX_G_OBJ_LDTX_SPRITE] = &objLoadTxSprite;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT] = &objLoadTxRect;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT_R] = &objLoadTxRectR;

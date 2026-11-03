@@ -67,6 +67,8 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 
 # S2DEX 1.x: bgCopy for 4/8-bit images (GT64 title backgrounds drew as noise) and the object commands RT64 left
 # unimplemented (G_OBJ_MOVEMEM, G_OBJ_RECTANGLE/SPRITE, the LDTX draws): GT64 draws its menus and text with them.
+# Also: unscaled 4/8-bit bg1Cyc (scrolling sky panoramas) and per-task reset of the LOADTXTR skip statuses (stale
+# sky palettes).
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-s2dex1-objects.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)

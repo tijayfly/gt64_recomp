@@ -81,7 +81,7 @@ extern "C" void gt_debug_swap(uint32_t fb) {
     n++;
 }
 
-// Widescreen: the boot logos (licence, GT, Ocean, Imagineer) are 4:3 pictures whose full-screen fills reach past the
+// Widescreen: the boot logos (licence, GT, Ocean, Imagineer), intro and menus are 4:3 pictures whose full-screen fills reach past the
 // 4:3 frame with RT64's "Expand". While the game is in one of the logo modes, render at the original 4:3 aspect ratio
 // (pillarboxed) and switch back afterwards. Only the runtime's live setting changes; the saved setting is untouched.
 #include "ultramodern/config.hpp"
@@ -90,7 +90,10 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
     constexpr uint32_t logo_modes[] = {
+        // Boot logos, intro and title.
         0x8000311C, 0x8000313C, 0x80003388, 0x800033D0, 0x80003400, 0x80003458, 0x800034A0, 0x800034F8, 0x80003540,
+        // Front-end menus (mode, team and car select), the round menu, and loading into the race.
+        0x80003BB4, 0x8000416C, 0x80004678,
     };
     bool pillarboxed = false;
 }
