@@ -1,0 +1,304 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f6864ff..51aa31e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -562,6 +562,7 @@ build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/R
+ build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/RtCopyDepthToColor4XPS.hlsl" "-D SAMPLES_4X")
+ build_pixel_shader(  rt64 "src/shaders/RtCopyDepthToColorPS.hlsl" "src/shaders/RtCopyDepthToColor8XPS.hlsl" "-D SAMPLES_8X")
+ build_pixel_shader(  rt64 "src/shaders/TextureCopyPS.hlsl")
++build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl")
+ build_compute_shader(rt64 "src/shaders/TextureDecodeCS.hlsl")
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples2XPS.hlsl" "-D SAMPLES_2X")
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples4XPS.hlsl" "-D SAMPLES_4X")
+diff --git a/src/render/rt64_descriptor_sets.h b/src/render/rt64_descriptor_sets.h
+index 69a82ac..f878f58 100644
+--- a/src/render/rt64_descriptor_sets.h
++++ b/src/render/rt64_descriptor_sets.h
+@@ -643,6 +643,22 @@ namespace RT64 {
+         }
+     };
+ 
++    struct CrackFillDescriptorSet : RenderDescriptorSetBase {
++        uint32_t gColor;
++        uint32_t gDepth;
++
++        CrackFillDescriptorSet(RenderDevice *device = nullptr) {
++            builder.begin();
++            gColor = builder.addTexture(1);
++            gDepth = builder.addTexture(2);
++            builder.end();
++
++            if (device != nullptr) {
++                create(device);
++            }
++        }
++    };
++
+     struct TextureDecodeDescriptorSet : RenderDescriptorSetBase {
+         uint32_t TMEM;
+         uint32_t RGBA32;
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+index 06b4577..7edddd6 100644
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -1299,6 +1299,46 @@ namespace RT64 {
+                 submitRasterScene(worker, framebuffer, targetDrawCall.fbStorage, rasterScene, depthState);
+             }
+         }
++
++        if (framebuffer.crackFill && (colorTarget != nullptr) && (framebuffer.crackFillSet != nullptr) && (crackFillCopy != nullptr)) {
++            RenderCommandList *commandList = worker->commandList.get();
++            commandList->barriers(RenderBarrierStage::COPY, {
++                RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COPY_SOURCE),
++                RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::COPY_DEST)
++            });
++
++            commandList->copyTexture(crackFillCopy.get(), colorTarget->texture.get());
++            commandList->barriers(RenderBarrierStage::GRAPHICS, {
++                RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COLOR_WRITE),
++                RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::SHADER_READ),
++                RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ)
++            });
++
++            colorTarget->setupColorFramebuffer(worker);
++            const RenderViewport viewport(0.0f, 0.0f, float(colorTarget->width), float(colorTarget->height));
++            const RenderRect scissor(0, 0, int32_t(colorTarget->width), int32_t(colorTarget->height));
++            struct {
++                int32_t width;
++                int32_t height;
++                int32_t radius;
++                float epsilon;
++            } pushConstants = { int32_t(colorTarget->width), int32_t(colorTarget->height), framebuffer.crackFillRadius, 1e-4f };
++            static const bool crackFillDebug = (getenv("GT_CRACK_FILL_DEBUG") != nullptr);
++            if (crackFillDebug) {
++                pushConstants.epsilon = -pushConstants.epsilon;
++            }
++
++            commandList->setFramebuffer(colorTarget->textureFramebuffer.get());
++            commandList->setViewports(viewport);
++            commandList->setScissors(scissor);
++            commandList->setPipeline(shaderLibrary->crackFill.pipeline.get());
++            commandList->setGraphicsPipelineLayout(shaderLibrary->crackFill.pipelineLayout.get());
++            commandList->setGraphicsDescriptorSet(framebuffer.crackFillSet->get(), 0);
++            commandList->setGraphicsPushConstants(0, &pushConstants);
++            commandList->setVertexBuffers(0, nullptr, 0, nullptr);
++            commandList->drawInstanced(3, 1, 0, 0);
++            commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_WRITE));
++        }
+     }
+ 
+     void FramebufferRenderer::waitForUploaders() {
+@@ -1429,6 +1469,41 @@ namespace RT64 {
+ #   endif
+ 
+         targetDrawCall.fbStorage = p.fbStorage;
++
++        // Crack fill (see CrackFillPS.hlsl): only for single-sampled colour targets drawn with depth writes this frame.
++        {
++            static const bool crackFillDisabled = (getenv("GT_NO_CRACK_FILL") != nullptr);
++            RenderTarget *colorTarget = p.fbStorage->colorTarget;
++            RenderTarget *depthTarget = p.fbStorage->depthTarget;
++            framebuffer.crackFill = !crackFillDisabled && (colorTarget != nullptr) && (depthTarget != nullptr) && fbPair.depthWrite &&
++                (colorTarget->multisampling.sampleCount <= 1) && (depthTarget->multisampling.sampleCount <= 1) &&
++                (colorTarget->width == depthTarget->width) && (colorTarget->height == depthTarget->height);
++            if (framebuffer.crackFill) {
++                if ((crackFillCopy == nullptr) || (crackFillCopyWidth != colorTarget->width) || (crackFillCopyHeight != colorTarget->height) || (crackFillCopyFormat != colorTarget->format)) {
++                    crackFillCopy = p.worker->device->createTexture(RenderTextureDesc::ColorTarget(colorTarget->width, colorTarget->height, colorTarget->format));
++                    crackFillCopyWidth = colorTarget->width;
++                    crackFillCopyHeight = colorTarget->height;
++                    crackFillCopyFormat = colorTarget->format;
++                }
++
++                if (framebuffer.crackFillSet == nullptr) {
++                    framebuffer.crackFillSet = std::make_unique<CrackFillDescriptorSet>(p.worker->device);
++                }
++
++                if (framebuffer.crackFillCopyTexture != crackFillCopy.get()) {
++                    framebuffer.crackFillSet->setTexture(framebuffer.crackFillSet->gColor, crackFillCopy.get(), RenderTextureLayout::SHADER_READ);
++                    framebuffer.crackFillCopyTexture = crackFillCopy.get();
++                }
++
++                if (framebuffer.crackFillDepthTexture != depthTarget->texture.get()) {
++                    framebuffer.crackFillSet->setTexture(framebuffer.crackFillSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
++                    framebuffer.crackFillDepthTexture = depthTarget->texture.get();
++                }
++
++                // Gaps up to about half an N64 pixel.
++                framebuffer.crackFillRadius = std::max(1, int32_t(std::lround(p.resolutionScale.y * 0.5f)));
++            }
++        }
+         targetDrawCall.sceneIndices.clear();
+ 
+         const float SimilarityPercentage = 0.1f; // TODO: Make more strict once VI ratios are in.
+diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
+index 3add9c3..ff069dc 100644
+--- a/src/render/rt64_framebuffer_renderer.h
++++ b/src/render/rt64_framebuffer_renderer.h
+@@ -118,8 +118,19 @@ namespace RT64 {
+             std::set<RenderTarget *> transitionRenderTargetSet;
+             RenderTargetDrawCall renderTargetDrawCall;
+             RenderViewport viewport;
++            std::unique_ptr<CrackFillDescriptorSet> crackFillSet;
++            const RenderTexture *crackFillCopyTexture = nullptr;
++            const RenderTexture *crackFillDepthTexture = nullptr;
++            bool crackFill = false;
++            int32_t crackFillRadius = 1;
+         };
+ 
++        // Copy of the colour target read by the crack fill pass.
++        std::unique_ptr<RenderTexture> crackFillCopy;
++        uint32_t crackFillCopyWidth = 0;
++        uint32_t crackFillCopyHeight = 0;
++        RenderFormat crackFillCopyFormat = RenderFormat::UNKNOWN;
++
+         std::vector<Framebuffer> framebufferVector;
+         std::vector<BufferUploader *> pendingUploaders;
+         uint32_t framebufferCount = 0;
+diff --git a/src/render/rt64_shader_library.cpp b/src/render/rt64_shader_library.cpp
+index d1c5273..c653f18 100644
+--- a/src/render/rt64_shader_library.cpp
++++ b/src/render/rt64_shader_library.cpp
+@@ -40,6 +40,7 @@
+ #include "shaders/RtCopyDepthToColor4XPS.hlsl.spirv.h"
+ #include "shaders/RtCopyDepthToColor8XPS.hlsl.spirv.h"
+ #include "shaders/TextureCopyPS.hlsl.spirv.h"
++#include "shaders/CrackFillPS.hlsl.spirv.h"
+ #include "shaders/TextureDecodeCS.hlsl.spirv.h"
+ #include "shaders/TextureResolveSamples2XPS.hlsl.spirv.h"
+ #include "shaders/TextureResolveSamples4XPS.hlsl.spirv.h"
+@@ -86,6 +87,7 @@
+ #   include "shaders/RtCopyDepthToColor4XPS.hlsl.dxil.h"
+ #   include "shaders/RtCopyDepthToColor8XPS.hlsl.dxil.h"
+ #   include "shaders/TextureCopyPS.hlsl.dxil.h"
++#   include "shaders/CrackFillPS.hlsl.dxil.h"
+ #   include "shaders/TextureDecodeCS.hlsl.dxil.h"
+ #   include "shaders/TextureResolveSamples2XPS.hlsl.dxil.h"
+ #   include "shaders/TextureResolveSamples4XPS.hlsl.dxil.h"
+@@ -131,6 +133,7 @@
+ #   include "shaders/RtCopyDepthToColor4XPS.hlsl.metal.h"
+ #   include "shaders/RtCopyDepthToColor8XPS.hlsl.metal.h"
+ #   include "shaders/TextureCopyPS.hlsl.metal.h"
++#   include "shaders/CrackFillPS.hlsl.metal.h"
+ #   include "shaders/TextureDecodeCS.hlsl.metal.h"
+ #   include "shaders/TextureResolveSamples2XPS.hlsl.metal.h"
+ #   include "shaders/TextureResolveSamples4XPS.hlsl.metal.h"
+@@ -569,6 +572,26 @@ namespace RT64 {
+             textureCopy.pipeline = device->createGraphicsPipeline(pipelineDesc);
+         }
+ 
++        // Crack fill.
++        {
++            CrackFillDescriptorSet descriptorSet;
++            layoutBuilder.begin();
++            layoutBuilder.addPushConstant(0, 0, sizeof(int32_t) * 4, RenderShaderStageFlag::PIXEL);
++            layoutBuilder.addDescriptorSet(descriptorSet);
++            layoutBuilder.end();
++            crackFill.pipelineLayout = layoutBuilder.create(device);
++
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(CrackFillPSBlobDXIL, CrackFillPSBlobSPIRV, CrackFillPSBlobMSL, "PSMain", shaderFormat));
++            RenderGraphicsPipelineDesc pipelineDesc;
++            pipelineDesc.pipelineLayout = crackFill.pipelineLayout.get();
++            pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
++            pipelineDesc.renderTargetFormat[0] = RenderTarget::colorBufferFormat(usesHDR);
++            pipelineDesc.renderTargetCount = 1;
++            pipelineDesc.vertexShader = fullScreenVertexShader.get();
++            pipelineDesc.pixelShader = pixelShader.get();
++            crackFill.pipeline = device->createGraphicsPipeline(pipelineDesc);
++        }
++
+         // Texture Decode.
+         {
+             TextureDecodeDescriptorSet descriptorSet;
+diff --git a/src/render/rt64_shader_library.h b/src/render/rt64_shader_library.h
+index 641f3ec..2e436ec 100644
+--- a/src/render/rt64_shader_library.h
++++ b/src/render/rt64_shader_library.h
+@@ -53,6 +53,7 @@ namespace RT64 {
+         ShaderRecord rtCopyDepthToColorMS;
+         ShaderRecord textureDecode;
+         ShaderRecord textureCopy;
++        ShaderRecord crackFill;
+         ShaderRecord textureResolve;
+         ShaderRecord videoInterfaceLinear;
+         ShaderRecord videoInterfaceNearest;
+diff --git a/src/shaders/CrackFillPS.hlsl b/src/shaders/CrackFillPS.hlsl
+new file mode 100644
+index 0000000..521cf70
+--- /dev/null
++++ b/src/shaders/CrackFillPS.hlsl
+@@ -0,0 +1,75 @@
++//
++// RT64
++//
++
++// Fills hairline cracks between polygons: pixels farther than the geometry on both sides of them along a row or a
++// column (and than those surfaces extended to them), in a gap of at most `radius` pixels, take the colour of that
++// geometry. At the N64's resolution these gaps are
++// under a pixel wide and the VI's coverage filtering hides them; at high resolutions they show what's behind (often
++// the sky) as thin lines.
++
++struct CrackFillCB {
++    int2 size;
++    int radius;
++    float epsilon;
++};
++
++[[vk::push_constant]] ConstantBuffer<CrackFillCB> gConstants : register(b0);
++Texture2D<float4> gColor : register(t1);
++Texture2D<float> gDepth : register(t2);
++
++float depthAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    return gDepth.Load(int3(p, 0));
++}
++
++float4 colorAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    return gColor.Load(int3(p, 0));
++}
++
++float4 PSMain(in float4 pos : SV_Position, in float2 uv : TEXCOORD0) : SV_TARGET {
++    const int2 p = int2(pos.xy);
++    const float limit = depthAt(p) - abs(gConstants.epsilon);
++    int bestGap = 0x7FFF;
++    float4 best = float4(0.0f, 0.0f, 0.0f, 0.0f);
++    for (int axis = 0; axis < 2; axis++) {
++        const int2 dir = (axis == 0) ? int2(1, 0) : int2(0, 1);
++        int na = 0;
++        int nb = 0;
++        for (int k = 1; k <= gConstants.radius; k++) {
++            if ((na == 0) && (depthAt(p - dir * k) < limit)) {
++                na = k;
++            }
++
++            if ((nb == 0) && (depthAt(p + dir * k) < limit)) {
++                nb = k;
++            }
++        }
++
++        if ((na > 0) && (nb > 0)) {
++            // Each side's surface, extrapolated to this pixel, must also be nearer: a pixel of a sloped surface (the
++            // ground below a car) is nearer than the pixel next to it but is no crack.
++            const float da = depthAt(p - dir * na);
++            const float db = depthAt(p + dir * nb);
++            const float ea = da + (da - depthAt(p - dir * (na + 1))) * float(na);
++            const float eb = db + (db - depthAt(p + dir * (nb + 1))) * float(nb);
++            const int gap = na + nb - 1;
++            if ((ea < limit) && (eb < limit) && (gap <= gConstants.radius) && (gap < bestGap)) {
++                bestGap = gap;
++                best = lerp(colorAt(p - dir * na), colorAt(p + dir * nb), float(na) / float(na + nb));
++            }
++        }
++    }
++
++    if (bestGap > gConstants.radius) {
++        discard;
++    }
++
++    // Debug: a negative epsilon marks the filled pixels.
++    if (gConstants.epsilon < 0.0f) {
++        return float4(1.0f, 0.0f, 1.0f, 1.0f);
++    }
++
++    return best;
++}

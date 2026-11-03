@@ -35,7 +35,7 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake, shoulders shift
 - [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
 - [ ] Saves (Controller Pak; the runtime reports no pak, so the game offers to continue without saving)
-- [x] No cracks between polygons at high resolution (vertices snapped to the N64's quarter-pixel grid)
+- [x] Hairline cracks between polygons filled at high resolution (the sky showed through track seams)
 
 ## Enhancements
 

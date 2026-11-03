@@ -79,9 +79,10 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # right edge); fixRectLR only ever extending rects (it left gaps between wrapped sky pieces); 2D (S2DEX) rectangles
 # and sprites drawn with point sampling; filtered, half-strength car shadows.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-full-frame-view.patch)
-# Vertex screen positions snapped to the RSP's quarter-pixel grid: no hairline cracks between polygons at high
-# resolutions (the sky showed through seams in the track geometry).
-apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-vertex-snap.patch)
+# Crack fill: a pass after each 3D framebuffer fills hairline gaps between polygons (pixels farther than the surfaces
+# on both sides, at most half an N64 pixel wide) with the colour around them, as the N64's VI coverage filtering does.
+# At high resolutions the sky showed through seams in the track geometry.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-crack-fill.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 
