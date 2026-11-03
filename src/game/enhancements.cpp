@@ -92,7 +92,7 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
-namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); }
+namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); }
 
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
@@ -132,6 +132,37 @@ void gt::widescreen_on_vi() {
     }
 
     // Frames are built at 30 FPS or less (much less while loading), so allow a couple of seconds between them.
+    // The card box: the menus, title and intro use 288x208 at (16, 16); the boot logo cards end at line 216 (the GT and
+    // Ocean cards' white starts at 16, the Imagineer picture at 8). The Imagineer card fades out over the start of the
+    // intro, so keep its box for the intro's first seconds (the intro's own 3D isn't remapped, and nothing 2D is
+    // drawn again until the title).
+    {
+        static uint32_t intro_vi = 0;
+        static uint32_t prev_mode = 0;
+        if (mode == intro_mode && prev_mode != intro_mode) {
+            intro_vi = vi_count;
+        }
+        prev_mode = mode;
+        int32_t y0 = 16, y1 = 224;
+        if (mode >= 0x8000311C && mode <= 0x80003458) {
+            y1 = 216;
+        }
+        else if (mode == 0x800034A0 || mode == 0x800034F8 || (mode == intro_mode && vi_count - intro_vi < 4 * 60)) {
+            y0 = 8;
+            y1 = 216;
+        }
+        static const char* box_env = std::getenv("GT_CARD_BOX_Y");  // debug: "y0,y1"
+        if (box_env != nullptr) {
+            sscanf(box_env, "%d,%d", &y0, &y1);
+        }
+        static int32_t box_y0 = 0, box_y1 = 0;
+        if (y0 != box_y0 || y1 != box_y1) {
+            RT64::setCardRemapBox(16, y0, 304, y1);
+            box_y0 = y0;
+            box_y1 = y1;
+        }
+    }
+
     const bool race = (mode >= race_modes_start) && (vi_count - full_view_vi <= 120);
     {
         static const bool log = std::getenv("GT_MODELOG") != nullptr;

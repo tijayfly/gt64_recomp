@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 secs=${1:-20}; every=${2:-5}; out=${3:-shots}
 mkdir -p "$out"
 export DISPLAY=:99
-pgrep -f "[X]vfb :99" > /dev/null || { Xvfb :99 -screen 0 1600x900x24 > /dev/null 2>&1 & sleep 1; }
+pgrep -f "[X]vfb :99" > /dev/null || { Xvfb :99 -screen 0 ${XVFB_SIZE:-1600x900}x24 > /dev/null 2>&1 & sleep 1; }
 export SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy} SDL_VIDEODRIVER=x11
 GT_ROM="${GT_ROM:-$PWD/rom/GT64 - Championship Edition (USA).z64}" dbus-run-session -- build/app/GT64Recompiled > "$out/run.log" 2>&1 &
 pid=$!
