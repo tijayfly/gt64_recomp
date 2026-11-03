@@ -76,7 +76,8 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # Full-frame race view and 4:3 screens: flags set by the game for a full-frame 3D view (the S2DEX patch then wraps the
 # sky out to the window's edges and makes the fade grid cover the frame) and for its "card" screens (2D tasks remapped
 # from the 288x208 box at (16, 16) to the full frame); one-pixel-short full-screen scissors widened (a line at the
-# right edge); fixRectLR only ever extending rects (it left gaps between wrapped sky pieces).
+# right edge); fixRectLR only ever extending rects (it left gaps between wrapped sky pieces); 2D (S2DEX) rectangles
+# and sprites drawn with point sampling.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-full-frame-view.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)

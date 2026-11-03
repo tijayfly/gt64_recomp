@@ -1,5 +1,5 @@
 diff --git a/src/gbi/rt64_gbi_s2dex.cpp b/src/gbi/rt64_gbi_s2dex.cpp
-index 4b41bfa..492b44d 100644
+index 4b41bfa..b4939ce 100644
 --- a/src/gbi/rt64_gbi_s2dex.cpp
 +++ b/src/gbi/rt64_gbi_s2dex.cpp
 @@ -1,3 +1,5 @@
@@ -170,7 +170,7 @@ index 4b41bfa..492b44d 100644
              const uint8_t lineShiftOffset = (bg.imageSiz == G_IM_SIZ_32b) ? 1 : 0;
              const uint16_t bgLine = bg.imageW >> (2 + bg.imageSiz - lineShiftOffset);
              const uint16_t dsdx = 4 << 10;
-@@ -546,6 +694,200 @@ namespace RT64 {
+@@ -546,6 +694,204 @@ namespace RT64 {
              }
          }
  
@@ -262,6 +262,9 @@ index 4b41bfa..492b44d 100644
 +                    // Raw triangle texture coordinates are in half texels (as RT64's RDP triangle path produces them).
 +                    tc[i * 2 + 0] = tu[k] * 2.0f; tc[i * 2 + 1] = tv[k] * 2.0f;
 +                }
++                // Point sampling, like the other 2D rectangles (see RDP::drawTexRect).
++                const uint32_t savedOtherModeH = rdp->otherMode.H;
++                rdp->setOtherMode((savedOtherModeH & ~(3U << G_MDSFT_TEXTFILT)) | G_TF_POINT, rdp->otherMode.L);
 +                state->startSpriteCommand(0);
 +                rdp->drawTris(2, pos, tc, col, G_TX_RENDERTILE, 0);
 +                // Tell RT64 which part of the tile is sampled (texture rectangles do this themselves); without it only
@@ -270,6 +273,7 @@ index 4b41bfa..492b44d 100644
 +                    rdp->updateCallTexcoords(tu[k] * 2.0f, tv[k] * 2.0f);
 +                }
 +                state->endSpriteCommand();
++                rdp->setOtherMode(savedOtherModeH, rdp->otherMode.L);
 +                return;
 +            }
 +
@@ -371,7 +375,7 @@ index 4b41bfa..492b44d 100644
          void objLoadTxtr(State *state, DisplayList **dl) {
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxtr::start(0x%08X)", (*dl)->w1);
-@@ -573,8 +915,7 @@ namespace RT64 {
+@@ -573,8 +919,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the sprite draw
@@ -381,7 +385,7 @@ index 4b41bfa..492b44d 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxSprite::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -592,8 +933,7 @@ namespace RT64 {
+@@ -592,8 +937,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect draw
@@ -391,7 +395,7 @@ index 4b41bfa..492b44d 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRect::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -611,8 +951,7 @@ namespace RT64 {
+@@ -611,8 +955,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect r draw
@@ -401,7 +405,7 @@ index 4b41bfa..492b44d 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRectR::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -620,6 +959,12 @@ namespace RT64 {
+@@ -620,6 +963,12 @@ namespace RT64 {
  
          void reset(State *state) {
              state->rsp->objRenderMode = 0x0;
@@ -414,7 +418,7 @@ index 4b41bfa..492b44d 100644
          }
  
          void setup(GBI *gbi) {
-@@ -645,6 +990,9 @@ namespace RT64 {
+@@ -645,6 +994,9 @@ namespace RT64 {
              gbi->map[S2DEX_G_OBJ_LDTX_SPRITE] = &objLoadTxSprite;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT] = &objLoadTxRect;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT_R] = &objLoadTxRectR;

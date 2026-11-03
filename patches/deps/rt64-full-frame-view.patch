@@ -13,7 +13,7 @@ index dccaa87..99e46ae 100644
              GBIReset resetFunction = resetFromTask ? hleGBI->resetFromTask : hleGBI->resetFromLoad;
              if (resetFunction != nullptr) {
 diff --git a/src/hle/rt64_rdp.cpp b/src/hle/rt64_rdp.cpp
-index a10c11a..4e8d841 100644
+index a10c11a..88a6776 100644
 --- a/src/hle/rt64_rdp.cpp
 +++ b/src/hle/rt64_rdp.cpp
 @@ -972,6 +972,19 @@ namespace RT64 {
@@ -68,6 +68,26 @@ index a10c11a..4e8d841 100644
                  lry = scissorRect.lry;
              }
          }
+@@ -1339,7 +1363,19 @@ namespace RT64 {
+             lry |= 3;
+         }
+ 
++        // GT64: draw 2D (S2DEX) rectangles with point sampling; bilinear filtering blurs the upscaled sprites and leaves
++        // lines at their tile seams. The skies (part of the 3D view) keep their filtering.
++        const uint32_t savedOtherModeH = otherMode.H;
++        const bool forcePoint = s2dTask && !noCardRemap && (otherMode.textFilt() != G_TF_POINT);
++        if (forcePoint) {
++            setOtherMode((otherMode.H & ~(3U << G_MDSFT_TEXTFILT)) | G_TF_POINT, otherMode.L);
++        }
++
+         drawRect(ulx, uly, lrx, lry, uls, ult, dsdx, dtdy, flip, extAlignment);
++
++        if (forcePoint) {
++            setOtherMode(savedOtherModeH, otherMode.L);
++        }
+     }
+ 
+     void RDP::updateCallTexcoords(float u, float v) {
 diff --git a/src/hle/rt64_rdp.h b/src/hle/rt64_rdp.h
 index 84f4e7c..1029afa 100644
 --- a/src/hle/rt64_rdp.h
