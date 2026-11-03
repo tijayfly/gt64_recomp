@@ -3,15 +3,15 @@
 # GT 64 Recompiled
 
 **GT 64: Championship Edition (N64, 1998), as a native PC program.**
-Gamepad support · any resolution · widescreen · 60 FPS (planned)
+Gamepad support · any resolution · widescreen races · full-frame 4:3 screens
 
 </div>
 
 ---
 
 > [!WARNING]
-> **Work in progress.** It boots, plays audio and renders the front end and menus at 60 FPS. Races are untested.
-> See [Status](#status).
+> **Work in progress.** The boot logos, intro, menus and races are playable (tested on Windows; the Linux build
+> runs headless). Saving isn't working yet. See [Status](#status).
 
 This is a static recompilation of *GT 64: Championship Edition* (N64, USA) made with
 [N64Recomp](https://github.com/N64Recomp/N64Recomp). The game's MIPS code is translated to C, compiled for your PC
@@ -28,15 +28,29 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 
 - [x] ROM mapped: main code, one front-end code overlay, RSP microcodes
 - [x] libultra functions named (156), so the runtime can replace them
-- [x] N64Recomp and RSPRecomp configs
-- [x] Boots to the licence and title screens, with audio
-- [x] Front end and race setup menus render (fixed RT64's S2DEX bgCopy for 4-bit backgrounds)
-- [x] Gamepad defaults for racing: triggers for throttle/brake, shoulders shift
-- [x] 60 FPS (the game times its logic by elapsed time; its 30 FPS cap in some modes is lifted)
-- [x] Windows x64 build (cross-compiled, see docs/WINDOWS_CROSS.md)
-- [ ] Races verified, game speed checked at 60 FPS
-- [ ] Saves (EEPROM / Controller Pak)
-- [ ] One menu background with wrong colours
+- [x] Boots through the licence, logos, intro and title, with audio
+- [x] Menus, championship and time trial setup, races, pause menu
+- [x] HUD: rev counter needle and track map (rotated S2DEX sprites)
+- [x] Skies, including the intro's split-screen views
+- [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake, shoulders shift
+- [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
+- [ ] Saves (Controller Pak; the runtime reports no pak, so the game offers to continue without saving)
+- [ ] Thin blue lines at some geometry seams (e.g. trees)
+- [ ] A few pixels of extra sky at the right of the intro's split-screen views
+
+## Enhancements
+
+- **Widescreen races.** The race view fills the screen: the game draws its 3D in a 280x208 window inside a black
+  border, which is widened to the full frame, and the sky wraps out to the window's edges. The HUD keeps its 4:3
+  layout.
+- **Full-frame 4:3 screens.** The logos, title and menus are laid out in a 288x208 box inside a black border. They
+  are stretched to fill the 4:3 frame and pillarboxed. The switch between pillarbox and widescreen happens on black
+  frames, so going into and out of races is clean.
+- **Sharp 2D.** Logos, menus and HUD are drawn with point sampling instead of bilinear filtering.
+- **Any resolution.** RT64 renders at the window's resolution.
+- **30 FPS, like the original.** The game times some things by frame, so races and the intro ran too fast at
+  60 FPS, and RT64's frame interpolation flashed blue: the frame rate and refresh rate options are fixed to Original
+  and hidden.
 
 ## Building
 
@@ -97,10 +111,45 @@ cache/COP0 instructions (for example, the `ll.c` 64-bit helpers match libultra's
 
 </details>
 
+<details>
+<summary>Game hooks and RT64 changes</summary>
+
+Hooks in `gt64.us.toml` call native code in `src/game/enhancements.cpp`:
+
+- the controller thread waits for each frame (reads finish instantly here, so it starved the other threads);
+- the ROM read routine loads and unloads the front-end overlay;
+- the camera routine (`func_8000A7DC`) widens the single-view scissor rect to the full frame and scales the menus'
+  car models to match their stretched 2D;
+- on every VI, the game mode (`0x800E8810`) picks widescreen or pillarbox and the 2D box to stretch.
+
+Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake:
+
+- `rt64-s2dex1-objects.patch`: S2DEX 1.x object commands (rectangles, sprites, rotated sprites, LOADTXTR), 4/8-bit
+  `bgCopy` and `bg1Cyc` backgrounds, the sky wrapped out to the window's edges, the fade grid covering the frame,
+  point-sampled sprites;
+- `rt64-full-frame-view.patch`: the 2D remap ("card box" to the full frame, in 2D tasks only), whole-pixel edges,
+  one-pixel-short scissors widened (a line at the right edge), no gaps between wrapped rectangles;
+- `rt64-raw-triangles-aspect.patch`: screen-space triangles keep their 4:3 place in widescreen;
+- `N64ModernRuntime-screen-update-after-vi-swap.patch`: present after the VI swap (flicker);
+- the rest are build and platform fixes shared with Mission: Impossible Recompiled.
+
+</details>
+
+<details>
+<summary>Testing</summary>
+
+`scripts/headless.sh` runs the game under Xvfb (lavapipe works) and takes screenshots; `GT_INPUT=<file>` feeds
+controller 1 from a file. `scripts/torace.sh <dir>` drives a run from boot into a Free Run race. Debug switches:
+`GT_MODELOG` (game modes), `GT_VPLOG` (camera view), `GT_TASKLOG`, `GT_STATS`, `GT_NO_REMAP` (turn off the 2D
+stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box).
+
+</details>
+
 ## Yes, AI wrote this
 
 This port is being made by Claude (Anthropic's AI) working with TiJayFLY, who directs it and tests it. Claude mapped
-the ROM, named the libultra functions and wrote the configs and app code.
+the ROM, named the libultra functions, wrote the configs and app code and the RT64 changes, and tested headless;
+TiJayFLY tested every build on Windows and reported what was wrong.
 
 It stands entirely on hand-built work by other people: [N64Recomp, N64ModernRuntime and Zelda64Recomp](https://github.com/N64Recomp)
 by Mr-Wiseguy and contributors, [RT64](https://github.com/rt64/rt64) by Dario and contributors,
