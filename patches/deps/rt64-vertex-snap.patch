@@ -1,0 +1,18 @@
+diff --git a/src/shaders/RSPProcessCS.hlsl b/src/shaders/RSPProcessCS.hlsl
+index b02446e..58f33b2 100644
+--- a/src/shaders/RSPProcessCS.hlsl
++++ b/src/shaders/RSPProcessCS.hlsl
+@@ -127,7 +127,12 @@ void CSMain(uint vertexIndex : SV_DispatchThreadID) {
+     // Convert to N64 screen position.
+     const RSPViewport rspViewport = rspViewportVector[viewProjIndex];
+     const float3 ndcPos = tfPos.xyz / float3(tfPos.w, -tfPos.w, tfPos.w);
+-    const float4 screenPos = float4(ndcPos * rspViewport.scale + rspViewport.translate, tfPos.w);
++    float4 screenPos = float4(ndcPos * rspViewport.scale + rspViewport.translate, tfPos.w);
++
++    // Snap screen positions to the RSP's s13.2 grid (a quarter of an N64 pixel), like the RSP does. Edges of polygons
++    // whose vertices differ by a hair in the model then coincide again, instead of leaving hairline cracks that show
++    // what's behind at high resolutions.
++    screenPos.xy = round(screenPos.xy * 4.0f) / 4.0f;
+     dstPos[vertexOffsetIndex] = screenPos;
+     dstTc[vertexOffsetIndex] = tc;
+     dstCol[vertexOffsetIndex] = vertexColor;

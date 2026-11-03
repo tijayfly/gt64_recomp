@@ -79,6 +79,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # right edge); fixRectLR only ever extending rects (it left gaps between wrapped sky pieces); 2D (S2DEX) rectangles
 # and sprites drawn with point sampling; filtered, half-strength car shadows.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-full-frame-view.patch)
+# Vertex screen positions snapped to the RSP's quarter-pixel grid: no hairline cracks between polygons at high
+# resolutions (the sky showed through seams in the track geometry).
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-vertex-snap.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 
