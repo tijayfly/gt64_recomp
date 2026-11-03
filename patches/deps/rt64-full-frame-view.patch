@@ -145,7 +145,7 @@ index 2970e71..2e612f8 100644
  
          // Assign the indices or increase the count of the active sprite command if it exists.
 diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
-index a870166..96ba52f 100644
+index a870166..41b50fb 100644
 --- a/src/hle/rt64_vi.cpp
 +++ b/src/hle/rt64_vi.cpp
 @@ -3,6 +3,8 @@
@@ -157,7 +157,7 @@ index a870166..96ba52f 100644
  #include <cassert>
  #include <memory.h>
  #include <stdio.h>
-@@ -15,6 +17,65 @@
+@@ -15,6 +17,76 @@
  namespace RT64 {
      // VI
      
@@ -171,6 +171,17 @@ index a870166..96ba52f 100644
 +
 +    bool isFullFrameView() {
 +        return fullFrameView.load();
++    }
++
++    // Set by the game during races: fill the empty bottom rows of the 3D view (see CrackFillPS.hlsl).
++    static std::atomic<bool> raceHoleFill{ false };
++
++    void setRaceHoleFill(bool enabled) {
++        raceHoleFill.store(enabled);
++    }
++
++    bool isRaceHoleFill() {
++        return raceHoleFill.load();
 +    }
 +
 +    // GT64 lays out its logos, title and menus in a 288x208 box at (16, 16) inside a black border. While the game sets
@@ -224,7 +235,7 @@ index a870166..96ba52f 100644
          return { 0.0f, 0.0f, 1.0f, 1.0f };
      }
 diff --git a/src/hle/rt64_vi.h b/src/hle/rt64_vi.h
-index 5b70e01..7c99bc9 100644
+index 5b70e01..3aaa11e 100644
 --- a/src/hle/rt64_vi.h
 +++ b/src/hle/rt64_vi.h
 @@ -4,6 +4,8 @@
@@ -236,7 +247,7 @@ index 5b70e01..7c99bc9 100644
  #include <array>
  #include <stdint.h>
  
-@@ -21,6 +23,19 @@
+@@ -21,6 +23,21 @@
  #define VI_STATUS_AA_MODE_NONE 3
  
  namespace RT64 {
@@ -252,6 +263,8 @@ index 5b70e01..7c99bc9 100644
 +    float cardRemapYf(float y);
 +    void setFullFrameView(bool enabled);
 +    bool isFullFrameView();
++    void setRaceHoleFill(bool enabled);
++    bool isRaceHoleFill();
 +
      struct VI {
          union Status {

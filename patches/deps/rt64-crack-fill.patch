@@ -41,10 +41,19 @@ index 69a82ac..f878f58 100644
          uint32_t TMEM;
          uint32_t RGBA32;
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index 06b4577..9b00b14 100644
+index 06b4577..0e6de94 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
-@@ -1299,6 +1299,47 @@ namespace RT64 {
+@@ -4,6 +4,8 @@
+ 
+ #include "rt64_framebuffer_renderer.h"
+ 
++#include "hle/rt64_vi.h"
++
+ #include "../include/rt64_extended_gbi.h"
+ 
+ #include "common/rt64_elapsed_timer.h"
+@@ -1299,6 +1301,56 @@ namespace RT64 {
                  submitRasterScene(worker, framebuffer, targetDrawCall.fbStorage, rasterScene, depthState);
              }
          }
@@ -71,7 +80,16 @@ index 06b4577..9b00b14 100644
 +                int32_t height;
 +                int32_t radius;
 +                float epsilon;
-+            } pushConstants = { int32_t(colorTarget->width), int32_t(colorTarget->height), framebuffer.crackFillRadius, 1e-4f };
++                int32_t holeStart;
++                int32_t holeSearch;
++                float clearDepth;
++                int32_t padding;
++            } pushConstants = { int32_t(colorTarget->width), int32_t(colorTarget->height), framebuffer.crackFillRadius, 1e-4f, 0, 0, 0.99999f, 0 };
++            if (framebuffer.crackFillHoles) {
++                // From the original window's bottom (line 216 of 240, a little above 224) down.
++                pushConstants.holeStart = int32_t(colorTarget->height * 216 / 240);
++                pushConstants.holeSearch = int32_t(colorTarget->height * 48 / 240);
++            }
 +            static const bool crackFillDebug = (getenv("GT_CRACK_FILL_DEBUG") != nullptr);
 +            if (crackFillDebug) {
 +                pushConstants.epsilon = -pushConstants.epsilon;
@@ -92,7 +110,7 @@ index 06b4577..9b00b14 100644
      }
  
      void FramebufferRenderer::waitForUploaders() {
-@@ -1429,6 +1470,47 @@ namespace RT64 {
+@@ -1429,6 +1481,49 @@ namespace RT64 {
  #   endif
  
          targetDrawCall.fbStorage = p.fbStorage;
@@ -133,6 +151,8 @@ index 06b4577..9b00b14 100644
 +                    framebuffer.crackFillDepthTexture = depthTarget->texture.get();
 +                }
 +
++                framebuffer.crackFillHoles = isFullFrameView() && isRaceHoleFill();
++
 +                // Gaps up to about an N64 pixel.
 +                framebuffer.crackFillRadius = std::max(1, int32_t(std::lround(p.resolutionScale.y)));
 +            }
@@ -141,10 +161,10 @@ index 06b4577..9b00b14 100644
  
          const float SimilarityPercentage = 0.1f; // TODO: Make more strict once VI ratios are in.
 diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
-index 3add9c3..494315c 100644
+index 3add9c3..d4cf5ac 100644
 --- a/src/render/rt64_framebuffer_renderer.h
 +++ b/src/render/rt64_framebuffer_renderer.h
-@@ -118,8 +118,20 @@ namespace RT64 {
+@@ -118,8 +118,21 @@ namespace RT64 {
              std::set<RenderTarget *> transitionRenderTargetSet;
              RenderTargetDrawCall renderTargetDrawCall;
              RenderViewport viewport;
@@ -152,6 +172,7 @@ index 3add9c3..494315c 100644
 +            const RenderTexture *crackFillCopyTexture = nullptr;
 +            const RenderTexture *crackFillDepthTexture = nullptr;
 +            bool crackFill = false;
++            bool crackFillHoles = false;
 +            int32_t crackFillRadius = 1;
          };
  
@@ -166,7 +187,7 @@ index 3add9c3..494315c 100644
          std::vector<BufferUploader *> pendingUploaders;
          uint32_t framebufferCount = 0;
 diff --git a/src/render/rt64_shader_library.cpp b/src/render/rt64_shader_library.cpp
-index d1c5273..39c63e5 100644
+index d1c5273..39aefb6 100644
 --- a/src/render/rt64_shader_library.cpp
 +++ b/src/render/rt64_shader_library.cpp
 @@ -40,6 +40,10 @@
@@ -210,7 +231,7 @@ index d1c5273..39c63e5 100644
 +        {
 +            CrackFillDescriptorSet descriptorSet;
 +            layoutBuilder.begin();
-+            layoutBuilder.addPushConstant(0, 0, sizeof(int32_t) * 4, RenderShaderStageFlag::PIXEL);
++            layoutBuilder.addPushConstant(0, 0, sizeof(int32_t) * 8, RenderShaderStageFlag::PIXEL);
 +            layoutBuilder.addDescriptorSet(descriptorSet);
 +            layoutBuilder.end();
 +            crackFill.pipelineLayout = layoutBuilder.create(device);
@@ -355,10 +376,10 @@ index 641f3ec..cc1eeb7 100644
          ShaderRecord videoInterfaceNearest;
 diff --git a/src/shaders/CrackFillPS.hlsl b/src/shaders/CrackFillPS.hlsl
 new file mode 100644
-index 0000000..0f8f3ea
+index 0000000..1d2b20f
 --- /dev/null
 +++ b/src/shaders/CrackFillPS.hlsl
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,128 @@
 +//
 +// RT64
 +//
@@ -373,6 +394,13 @@ index 0000000..0f8f3ea
 +    int2 size;
 +    int radius;
 +    float epsilon;
++    // Rows from this one down: pixels nothing was drawn in (cleared depth) take the colour of the nearest drawn pixel
++    // above them, up to holeSearch rows up. 0 = off. GT64 culls track pieces that fall entirely below its original
++    // window (line 224), so with the race view widened to the full frame the bottom rows were sometimes left empty.
++    int holeStart;
++    int holeSearch;
++    float clearDepth;
++    int padding;
 +};
 +
 +[[vk::push_constant]] ConstantBuffer<CrackFillCB> gConstants : register(b0);
@@ -427,7 +455,17 @@ index 0000000..0f8f3ea
 +
 +float4 PSMain(in float4 pos : SV_Position, in float2 uv : TEXCOORD0) : SV_TARGET {
 +    const int2 p = int2(pos.xy);
-+    const float limit = depthAt(p) - abs(gConstants.epsilon);
++    const float depth = depthAt(p);
++    if ((gConstants.holeStart > 0) && (p.y >= gConstants.holeStart) && (depth >= gConstants.clearDepth)) {
++        for (int k = 1; k <= gConstants.holeSearch; k++) {
++            const int2 q = p - int2(0, k);
++            if (depthAt(q) < gConstants.clearDepth) {
++                return (gConstants.epsilon < 0.0f) ? float4(0.0f, 1.0f, 1.0f, 1.0f) : colorAt(q);
++            }
++        }
++    }
++
++    const float limit = depth - abs(gConstants.epsilon);
 +    int bestGap = 0x7FFF;
 +    float4 best = float4(0.0f, 0.0f, 0.0f, 0.0f);
 +    for (int axis = 0; axis < 2; axis++) {

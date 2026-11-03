@@ -92,7 +92,7 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
-namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); }
+namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); }
 
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
@@ -165,6 +165,7 @@ void gt::widescreen_on_vi() {
         static int last = -1;
         if (log && int(race) != last) { fprintf(stderr, "[race] %d mode=%08X\n", int(race), mode); last = race; }
     }
+    RT64::setRaceHoleFill(race);
     const bool pillar = !race;
     const bool remap = !race && (vi_count - split_view_vi > 2);
     menu_3d_scale = remap && (mode != intro_mode);
@@ -202,8 +203,9 @@ extern "C" void gt_race_view(uint8_t* rdram) {
     uint32_t vp = w(cam + 0xCC), rect = w(cam + 0xD0);
     static const bool log = std::getenv("GT_VPLOG") != nullptr;
     if (log) {
-        static int n = 0;
-        if (n++ % 120 == 0)
+        static uint64_t last = 0;
+        const uint64_t key = (uint64_t(cam) << 32) ^ w(rect + 4) ^ (uint64_t(w(rect + 8)) << 8) ^ (uint64_t(w(rect + 12)) << 16) ^ (uint64_t(w(rect + 16)) << 24) ^ (uint64_t(uint16_t(h(vp))) << 40) ^ (uint64_t(uint16_t(h(vp + 2))) << 48) ^ (uint64_t(uint16_t(h(vp + 10))) << 20) ^ vp ^ (uint64_t(rect) << 12);
+        if (key != last && (last = key, true))
             fprintf(stderr, "[view] cam=%08X vp=%08X (%d %d %d %d / %d %d %d %d) rect=%08X (%d %d %d %d %d)\n", cam, vp,
                 h(vp), h(vp + 2), h(vp + 4), h(vp + 6), h(vp + 8), h(vp + 10), h(vp + 12), h(vp + 14), rect,
                 w(rect), w(rect + 4), w(rect + 8), w(rect + 12), w(rect + 16));
