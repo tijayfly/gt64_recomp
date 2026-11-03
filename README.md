@@ -34,8 +34,11 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] Skies, including the intro's split-screen views
 - [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake, shoulders shift
 - [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
+- [x] Track seams: hairline cracks between polygons filled at high resolution, with or without MSAA
+- [x] Custom app icon
 - [ ] Saves (Controller Pak; the runtime reports no pak, so the game offers to continue without saving)
-- [x] Hairline cracks between polygons filled at high resolution (the sky showed through track seams)
+- [ ] The bottom rows of the race view can be left empty for a frame when the game culls the track piece under the
+  camera (it only culled below its original window); they are filled from the rows above, a stopgap
 
 ## Enhancements
 
@@ -48,6 +51,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Sharp 2D, smooth sky.** Logos, menus and HUD are drawn with point sampling instead of bilinear filtering; the
   sky is filtered when upscaled.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
+- **No seams in the track.** At high resolutions the sky showed through hairline gaps between track polygons; a pass
+  after each 3D frame fills gaps up to an N64 pixel wide with the colour around them (works with MSAA).
+- **Start lights at the top of the screen.** They hung from the top of the old window.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **30 FPS, like the original.** The game times some things by frame, so races and the intro ran too fast at
   60 FPS, and RT64's frame interpolation flashed blue: the frame rate and refresh rate options are fixed to Original
@@ -129,8 +135,11 @@ Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake
   `bgCopy` and `bg1Cyc` backgrounds, the sky wrapped out to the window's edges, the fade grid covering the frame,
   point-sampled sprites;
 - `rt64-full-frame-view.patch`: the 2D remap ("card box" to the full frame, in 2D tasks only), whole-pixel edges,
-  one-pixel-short scissors widened (a line at the right edge), no gaps between wrapped rectangles;
-- `rt64-raw-triangles-aspect.patch`: screen-space triangles keep their 4:3 place in widescreen;
+  one-pixel-short scissors widened (a line at the right edge), no gaps between wrapped rectangles, the softer car
+  shadows, flags the game sets (full-frame view, race);
+- `rt64-raw-triangles-aspect.patch`: screen-space triangles keep their 4:3 place in widescreen; filtered sky draws;
+- `rt64-crack-fill.patch`: the crack fill pass (`CrackFillPS.hlsl`, with MSAA variants) and the race view's
+  bottom-row fill. Patches that touch the same files are made with `scripts/rt64_patch_diff.sh`;
 - `N64ModernRuntime-screen-update-after-vi-swap.patch`: present after the VI swap (flicker);
 - the rest are build and platform fixes shared with Mission: Impossible Recompiled.
 
@@ -142,7 +151,8 @@ Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake
 `scripts/headless.sh` runs the game under Xvfb (lavapipe works) and takes screenshots; `GT_INPUT=<file>` feeds
 controller 1 from a file. `scripts/torace.sh <dir>` drives a run from boot into a Free Run race. Debug switches:
 `GT_MODELOG` (game modes), `GT_VPLOG` (camera view), `GT_TASKLOG`, `GT_STATS`, `GT_NO_REMAP` (turn off the 2D
-stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box).
+stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_CRACK_FILL_DEBUG` (turn off the crack
+fill / show what it fills in magenta), `GT_NO_SHADOW_FIX`.
 
 </details>
 
