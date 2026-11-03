@@ -30,7 +30,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] libultra functions named (156), so the runtime can replace them
 - [x] Boots through the licence, logos, intro and title, with audio
 - [x] Menus, championship and time trial setup, races, pause menu; logos and menus unfiltered, as on the N64
-- [x] HUD, unfiltered: rev counter needle and track map (rotated S2DEX sprites)
+- [x] HUD, unfiltered: rev counter needle and track map (rotated S2DEX sprites); start lights placed for the
+  full-frame race view
 - [x] Skies, filtered, including the intro's split-screen views
 - [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake, shoulders shift
 - [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
@@ -49,7 +50,6 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   are stretched to fill the 4:3 frame and pillarboxed. The switch between pillarbox and widescreen happens on black
   frames, so going into and out of races is clean.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
-- **Start lights at the top of the screen.** They hung from the top of the old window.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **30 FPS, like the original.** The game times some things by frame, so races and the intro ran too fast at
   60 FPS, and RT64's frame interpolation flashed blue: the frame rate and refresh rate options are fixed to Original
