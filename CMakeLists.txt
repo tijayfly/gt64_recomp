@@ -70,6 +70,8 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # Also: unscaled 4/8-bit bg1Cyc (scrolling sky panoramas) and per-task reset of the LOADTXTR skip statuses (stale
 # sky palettes).
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-s2dex1-objects.patch)
+# Screen-space triangles (GT64's rotated HUD sprites) keep their 4:3 position in widescreen, like rectangles.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-raw-triangles-aspect.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 

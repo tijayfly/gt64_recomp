@@ -1,0 +1,15 @@
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+index 9fae0d4..7f1a57d 100644
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -1669,6 +1669,10 @@ namespace RT64 {
+                         case Projection::Type::Triangle: {
+                             instanceDrawCall.type = InstanceDrawCall::Type::RawTriangles;
+                             triangles.indexStart = call.meshDesc.rawVertexStart;
++                            // Raw (screen space) triangles are 2D like rectangles: keep them at their 4:3 position in
++                            // widescreen instead of stretching them across the window (GT64's rotated HUD sprites).
++                            triangles.screenScale = { invRatioScale, 1.0f };
++                            triangles.screenOffset = { 0.0f, 0.0f };
+                             break;
+                         }
+                         case Projection::Type::None:
