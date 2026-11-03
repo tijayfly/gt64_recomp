@@ -50,8 +50,6 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   are stretched to fill the 4:3 frame and pillarboxed. The switch between pillarbox and widescreen happens on black
   frames, so going into and out of races is clean.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
-- **No seams in the track.** At high resolutions the sky showed through hairline gaps between track polygons; a pass
-  after each 3D frame fills gaps up to an N64 pixel wide with the colour around them (works with MSAA).
 - **Start lights at the top of the screen.** They hung from the top of the old window.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **30 FPS, like the original.** The game times some things by frame, so races and the intro ran too fast at
