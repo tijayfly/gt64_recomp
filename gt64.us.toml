@@ -54,3 +54,10 @@ text = "{ void gt_debug_swap(uint32_t); gt_debug_swap((uint32_t)ctx->r4); }"
 func = "func_80007860"
 before_vram = 0x8000789C
 text = "{ int gt_fps60_enabled(void); if (gt_fps60_enabled()) ctx->r14 = 0; }"
+
+# Full-screen race view: the per-camera view (D_8010FFCC: +0xCC Vp, +0xD0 rect) is a 280x208 window inside a black
+# border. src/game/enhancements.cpp widens it to the full frame before the camera's display list is built.
+[[patches.hook]]
+func = "func_8000A7DC"
+before_vram = 0x8000A7DC
+text = "{ void gt_race_view(uint8_t*); gt_race_view(rdram); }"

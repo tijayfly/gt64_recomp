@@ -1,5 +1,5 @@
 diff --git a/src/gbi/rt64_gbi_s2dex.cpp b/src/gbi/rt64_gbi_s2dex.cpp
-index 4b41bfa..20ca6ab 100644
+index 4b41bfa..2c71eeb 100644
 --- a/src/gbi/rt64_gbi_s2dex.cpp
 +++ b/src/gbi/rt64_gbi_s2dex.cpp
 @@ -1,3 +1,5 @@
@@ -8,7 +8,7 @@ index 4b41bfa..20ca6ab 100644
  //
  // RT64
  //
-@@ -139,6 +141,78 @@ namespace RT64 {
+@@ -139,6 +141,115 @@ namespace RT64 {
              const uObjBg_t &bg = bgObject->bg;
              const uObjScaleBg_t &scaleBg = bgObject->scaleBg;
  
@@ -26,22 +26,54 @@ index 4b41bfa..20ca6ab 100644
 +                }
 +
 +                const double scaleX = scaleBg.scaleW / 1024.0;  // texels per screen pixel
-+                const double scaleY = scaleBg.scaleH / 1024.0;
++                double scaleY = scaleBg.scaleH / 1024.0;
 +                const uint32_t lineBytes = (texW << scaleBg.imageSiz) >> 1;
 +                const uint16_t line = static_cast<uint16_t>((lineBytes + 7) >> 3);
 +                const uint32_t tmemBytes = (scaleBg.imageFmt == G_IM_FMT_CI) ? 2048 : 4096;
 +                const uint32_t bandLines = std::max<uint32_t>(tmemBytes / (uint32_t(line) << 3), 1);
 +                const uint32_t imageAddress = state->rsp->fromSegmented(scaleBg.imageAddress);
-+                const uint32_t srcX0 = (uint32_t(scaleBg.imageX) >> 5) % texW;
 +                uint32_t srcY = (uint32_t(scaleBg.imageY) >> 5) % texH;
 +                const uint16_t loadLrs = static_cast<uint16_t>(((lineBytes >> 1) - 1) << 2);
 +                const bool copyMode = (rdp->otherMode.cycleType() == G_CYC_COPY);
 +                const int16_t dsdx = int16_t(scaleBg.scaleW) * (copyMode ? 4 : 1);
-+                const int16_t dtdy = int16_t(scaleBg.scaleH);
-+                const double texelsW = frameW * scaleX;
++                int16_t dtdy = int16_t(scaleBg.scaleH);
++                double texelsW = frameW * scaleX;
 +                const double texelsH = frameH * scaleY;
-+                const double frameX0 = scaleBg.frameX / 4.0;
++                double frameX0 = scaleBg.frameX / 4.0;
 +                const double frameY0 = scaleBg.frameY / 4.0;
++                uint32_t srcX0 = (uint32_t(scaleBg.imageX) >> 5) % texW;
++
++                // Full-screen race view: the sky spans the old 280x208 window (16..304, from y 16). Wrap it out past both
++                // sides (into the widescreen area) and repeat its top row up to the top of the screen.
++                double topY = frameY0;
++                bool adjustAspect = false;
++                if (isFullFrameView() && (scaleBg.frameX <= 16 * 4) && (scaleBg.frameX + scaleBg.frameW >= 304 * 4) && (scaleBg.frameY > 0) && (scaleBg.frameY <= 16 * 4)) {
++                    constexpr double extend = 640.0;
++                    const double left = frameX0 + extend;
++                    const double right = extend + 320.0 - (frameX0 + frameW);
++                    const double shift = std::fmod(left * scaleX, double(texW));
++                    srcX0 = uint32_t(std::lround(double(srcX0) + double(texW) - shift)) % texW;
++                    frameX0 = -extend;
++                    texelsW += (left + right) * scaleX;
++                    topY = 0.0;
++                    // Stretch the image down from the top of the screen (the panorama has no rows above the old window).
++                    scaleY = texelsH / (frameY0 + frameH);
++                    dtdy = int16_t(std::lround(scaleY * 1024.0));
++                    // Keep every wrapped piece at its 4:3-relative place: a piece covering the scissor width would
++                    // otherwise be stretched across the widescreen area.
++                    adjustAspect = true;
++                }
++                const uint8_t savedAspect = rdp->extended.global.rectAspect;
++                if (adjustAspect) {
++                    rdp->extended.global.rectAspect = G_EX_ASPECT_ADJUST;
++                    // And let them draw out to the window's edges: anchor the scissor's sides to the left and right edges.
++                    rdp->pushScissor();
++                    const FixedRect cur = rdp->scissorRectStack[rdp->scissorStackSize - 1];
++                    ExtendedAlignment edges;
++                    edges.leftOrigin = G_EX_ORIGIN_LEFT;
++                    edges.rightOrigin = G_EX_ORIGIN_RIGHT;
++                    rdp->setScissor(rdp->scissorModeStack[rdp->scissorStackSize - 1], 0, cur.uly, 0, cur.lry, edges);
++                }
 +                auto q = [](double v) { return int32_t(std::lround(v * 4.0)); };
 +
 +                rdp->setTile(G_TX_LOADTILE, G_IM_FMT_RGBA, G_IM_SIZ_16b, line, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -57,37 +89,42 @@ index 4b41bfa..20ca6ab 100644
 +                    rdp->loadTile(G_TX_LOADTILE, 0, 0, loadLrs, static_cast<uint16_t>((lines - 1) << 2));
 +                    rdp->setTileSize(G_TX_RENDERTILE, 0, 0, static_cast<uint16_t>((texW - 1) << 2), static_cast<uint16_t>((lines - 1) << 2));
 +
-+                    const double y0 = frameY0 + row / scaleY;
-+                    const double y1 = std::min(frameY0 + (row + lines) / scaleY, frameY0 + frameH);
-+                    double texel = 0.0;
-+                    uint32_t srcX = srcX0;
-+                    while (texel < texelsW) {
-+                        const double tw = std::min(texelsW - texel, double(texW - srcX));
-+                        const double x0 = frameX0 + texel / scaleX;
-+                        const double x1 = frameX0 + (texel + tw) / scaleX;
-+                        int32_t lrx = q(x1), lry = q(y1);
-+                        if (copyMode) {
-+                            lrx -= 4;
-+                            lry -= 4;
++                    auto drawRow = [&](double y0, double y1, int16_t dt) {
++                        double texel = 0.0;
++                        uint32_t srcX = srcX0;
++                        while (texel < texelsW) {
++                            const double tw = std::min(texelsW - texel, double(texW - srcX));
++                            const double x0 = frameX0 + texel / scaleX;
++                            const double x1 = frameX0 + (texel + tw) / scaleX;
++                            int32_t lrx = q(x1), lry = q(y1);
++                            if (copyMode) {
++                                lrx -= 4;
++                                lry -= 4;
++                            }
++                            if ((lrx > q(x0)) && (lry > q(y0))) {
++                                rdp->drawTexRect(q(x0), q(y0), lrx, lry, G_TX_RENDERTILE, int16_t(srcX << 5), 0, dsdx, dt, false);
++                            }
++                            texel += tw;
++                            srcX = 0;
 +                        }
-+                        if ((lrx > q(x0)) && (lry > q(y0))) {
-+                            rdp->drawTexRect(q(x0), q(y0), lrx, lry, G_TX_RENDERTILE, int16_t(srcX << 5), 0, dsdx, dtdy, false);
-+                        }
-+                        texel += tw;
-+                        srcX = 0;
-+                    }
++                    };
++                    drawRow(topY + row / scaleY, std::min(topY + (row + lines) / scaleY, frameY0 + frameH), dtdy);
 +
 +                    row += lines;
 +                    srcY = (srcY + lines) % texH;
 +                }
 +                state->endSpriteCommand();
++                rdp->extended.global.rectAspect = savedAspect;
++                if (adjustAspect) {
++                    rdp->popScissor();
++                }
 +                return;
 +            }
 +
              // Validate the image loading method is one of the two supported methods. It's worth noting 
              // that despite the load block method being documented, it doesn't actually work in the retail
              // microcode and it should therefore be treated as load tile as well.
-@@ -415,6 +489,35 @@ namespace RT64 {
+@@ -415,6 +526,35 @@ namespace RT64 {
              assert(bg.imageLoad == S2DEX_G_BGLT_LOADTILE); // TODO: Only the load tile version is implemented.
              
              const uint16_t TMEMAddress = 0;
@@ -123,7 +160,7 @@ index 4b41bfa..20ca6ab 100644
              const uint8_t lineShiftOffset = (bg.imageSiz == G_IM_SIZ_32b) ? 1 : 0;
              const uint16_t bgLine = bg.imageW >> (2 + bg.imageSiz - lineShiftOffset);
              const uint16_t dsdx = 4 << 10;
-@@ -546,6 +649,174 @@ namespace RT64 {
+@@ -546,6 +686,194 @@ namespace RT64 {
              }
          }
  
@@ -265,13 +302,33 @@ index 4b41bfa..20ca6ab 100644
 +            // the window so the fade covers the whole screen in widescreen.
 +            const bool fadeTile = (mode == ObjDrawMode::Rectangle) && (texW == 64) && (texH == 32) &&
 +                (s.imageFmt == G_IM_FMT_CI) && (s.imageSiz == G_IM_SIZ_4b);
++            const bool fullFrameFade = fadeTile && isFullFrameView();
 +            const uint8_t savedAspect = rdp->extended.global.rectAspect;
++            // The fade grid starts at (16, 16) and its task's scissor is the old 16..304 x 16..224 window, but the race
++            // view now fills the frame: lift the scissor and continue the edge tiles' pattern (it repeats every tile)
++            // out to the left and top edges, so the fade covers the whole screen.
 +            if (fadeTile) {
 +                rdp->extended.global.rectAspect = G_EX_ASPECT_STRETCH;
 +            }
-+            state->startSpriteCommand(0);
-+            rdp->drawTexRect(ulxQ, ulyQ, lrxQ, lryQ, G_TX_RENDERTILE, uls, ult, int16_t(dsdx), int16_t(dtdy), false);
-+            state->endSpriteCommand();
++            if (fullFrameFade) {
++                rdp->pushScissor();
++                rdp->setScissor(rdp->scissorModeStack[rdp->scissorStackSize - 1], 0, 0, 320 * 4, 240 * 4);
++            }
++            auto draw = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1, int16_t s0, int16_t t0) {
++                state->startSpriteCommand(0);
++                rdp->drawTexRect(x0, y0, x1, y1, G_TX_RENDERTILE, s0, t0, int16_t(dsdx), int16_t(dtdy), false);
++                state->endSpriteCommand();
++            };
++            draw(ulxQ, ulyQ, lrxQ, lryQ, uls, ult);
++            if (fullFrameFade) {
++                if ((dsdx == 1024) && (dtdy == 1024) && (uls == 0) && (ult == 0)) {
++                    const int16_t sEdge = int16_t((texW - 16) << 5), tEdge = int16_t((texH - 16) << 5);
++                    if (ulxQ == 64) draw(0, ulyQ, 64, lryQ, sEdge, 0);
++                    if (ulyQ == 64) draw(ulxQ, 0, lrxQ, 64, 0, tEdge);
++                    if ((ulxQ == 64) && (ulyQ == 64)) draw(0, 0, 64, 64, sEdge, tEdge);
++                }
++                rdp->popScissor();
++            }
 +            rdp->extended.global.rectAspect = savedAspect;
 +        }
 +
@@ -298,7 +355,7 @@ index 4b41bfa..20ca6ab 100644
          void objLoadTxtr(State *state, DisplayList **dl) {
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxtr::start(0x%08X)", (*dl)->w1);
-@@ -573,8 +844,7 @@ namespace RT64 {
+@@ -573,8 +901,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the sprite draw
@@ -308,7 +365,7 @@ index 4b41bfa..20ca6ab 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxSprite::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -592,8 +862,7 @@ namespace RT64 {
+@@ -592,8 +919,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect draw
@@ -318,7 +375,7 @@ index 4b41bfa..20ca6ab 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRect::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -611,8 +880,7 @@ namespace RT64 {
+@@ -611,8 +937,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect r draw
@@ -328,7 +385,7 @@ index 4b41bfa..20ca6ab 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRectR::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -620,6 +888,12 @@ namespace RT64 {
+@@ -620,6 +945,12 @@ namespace RT64 {
  
          void reset(State *state) {
              state->rsp->objRenderMode = 0x0;
@@ -341,7 +398,7 @@ index 4b41bfa..20ca6ab 100644
          }
  
          void setup(GBI *gbi) {
-@@ -645,6 +919,9 @@ namespace RT64 {
+@@ -645,6 +976,9 @@ namespace RT64 {
              gbi->map[S2DEX_G_OBJ_LDTX_SPRITE] = &objLoadTxSprite;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT] = &objLoadTxRect;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT_R] = &objLoadTxRectR;

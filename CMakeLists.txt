@@ -70,8 +70,13 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # Also: unscaled 4/8-bit bg1Cyc (scrolling sky panoramas) and per-task reset of the LOADTXTR skip statuses (stale
 # sky palettes).
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-s2dex1-objects.patch)
-# Screen-space triangles (GT64's rotated HUD sprites) keep their 4:3 position in widescreen, like rectangles.
+# Screen-space triangles (GT64's rotated HUD sprites) keep their 4:3 position in widescreen, like rectangles; draw
+# scissors are clamped to the framebuffer (extended origins could push them negative).
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-raw-triangles-aspect.patch)
+# Full-frame race view and full-height 4:3 screens: an output zoom and a full-frame-view flag set by the game (the
+# S2DEX patch then wraps the sky out to the window's edges and makes the fade grid cover the frame), the scissor
+# clamped to the window, and fixRectLR only ever extending rects (it left gaps between wrapped sky pieces).
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-full-frame-view.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 

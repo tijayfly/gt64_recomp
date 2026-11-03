@@ -81,19 +81,34 @@ extern "C" void gt_debug_swap(uint32_t fb) {
     n++;
 }
 
-// Widescreen: the boot logos (licence, GT, Ocean, Imagineer), intro and menus are 4:3 pictures whose full-screen fills reach past the
-// 4:3 frame with RT64's "Expand". While the game is in one of the logo modes, render at the original 4:3 aspect ratio
-// (pillarboxed) and switch back afterwards. Only the runtime's live setting changes; the saved setting is untouched.
+// Widescreen and full-height 4:3 screens.
+// - The boot logos (licence, GT, Ocean, Imagineer) and the intro are 4:3 pictures whose full-screen fills reach past
+//   the 4:3 frame with RT64's "Expand": while the game is in those modes, render at the original 4:3 aspect ratio
+//   (pillarboxed) and switch back afterwards. Only the runtime's live setting changes; the saved setting is untouched.
+// - The logos, title and menus are drawn inside a 16-line border (y 16..224): zoom the output by 240/208 so they fill
+//   the screen's height. The race and intro views fill the frame (see gt_race_view) and are not zoomed.
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
+namespace RT64 { void setVIZoom(float zoom); void setFullFrameView(bool enabled); }
+
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
-    constexpr uint32_t logo_modes[] = {
-        // Boot logos, intro and title.
-        0x8000311C, 0x8000313C, 0x80003388, 0x800033D0, 0x80003400, 0x80003458, 0x800034A0, 0x800034F8, 0x80003540,
+    constexpr uint32_t generic_mode = 0x800018A8;  // between modes: keep the previous state
+    constexpr uint32_t logo_modes[] = { 0x8000311C, 0x8000313C, 0x80003388, 0x800033D0, 0x80003400, 0x80003458, 0x800034A0, 0x800034F8 };
+    constexpr uint32_t intro_mode = 0x80003540;
+    constexpr uint32_t menu_modes[] = {
+        // Title and attract, mode select, the front-end menus (team/car select, setup) and the round menu.
+        0x80003640, 0x800036A8, 0x80003700, 0x80003760, 0x80003810, 0x80003878, 0x800038D0, 0x8000391C, 0x800039CC,
+        0x80003BB4, 0x80004124, 0x8000416C,
     };
+    constexpr float border_zoom = 240.0f / 208.0f;
     bool pillarboxed = false;
+    bool zoomed = false;
+
+    template <size_t N> bool in(const uint32_t (&list)[N], uint32_t v) {
+        return std::find(std::begin(list), std::end(list), v) != std::end(list);
+    }
 }
 
 void gt::widescreen_on_vi() {
@@ -102,20 +117,35 @@ void gt::widescreen_on_vi() {
         return;
     }
     const uint32_t mode = *reinterpret_cast<uint32_t*>(rdram + (mode_func_ptr - 0x80000000u));
-    bool logo = false;
-    for (uint32_t m : logo_modes) {
-        logo |= (m == mode);
+    static uint32_t last_mode = 0;
+    if (mode != last_mode) {
+        static const bool log = std::getenv("GT_MODELOG") != nullptr;
+        if (log) fprintf(stderr, "[mode] %08X t=%.1f\n", mode, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        last_mode = mode;
+    }
+    if (mode == generic_mode) {
+        return;
+    }
+
+    const bool logo = in(logo_modes, mode);
+    const bool pillar = logo || (mode == intro_mode);
+    const bool zoom = logo || in(menu_modes, mode);
+
+    if (zoom != zoomed) {
+        static const bool no_zoom = std::getenv("GT_NO_ZOOM") != nullptr;
+        RT64::setVIZoom((zoom && !no_zoom) ? border_zoom : 1.0f);
+        zoomed = zoom;
     }
 
     using namespace ultramodern::renderer;
     const GraphicsConfig& current = get_graphics_config();
-    if (logo && !pillarboxed && current.ar_option == AspectRatio::Expand) {
+    if (pillar && !pillarboxed && current.ar_option == AspectRatio::Expand) {
         GraphicsConfig config = current;
         config.ar_option = AspectRatio::Original;
         set_graphics_config(config);
         pillarboxed = true;
     }
-    else if (!logo && pillarboxed) {
+    else if (!pillar && pillarboxed) {
         if (current.ar_option == AspectRatio::Original) {
             GraphicsConfig config = current;
             config.ar_option = AspectRatio::Expand;
@@ -123,4 +153,30 @@ void gt::widescreen_on_vi() {
         }
         pillarboxed = false;
     }
+}
+
+// Race view (see gt64.us.toml).
+extern "C" void gt_race_view(uint8_t* rdram) {
+    auto w = [&](uint32_t a) -> uint32_t& { return *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u)); };
+    auto h = [&](uint32_t a) -> int16_t& { return *reinterpret_cast<int16_t*>(rdram + ((a ^ 2) - 0x80000000u)); };
+    uint32_t cam = w(0x8010FFCC);
+    if (cam < 0x80000000u || cam >= 0x80800000u) return;
+    uint32_t vp = w(cam + 0xCC), rect = w(cam + 0xD0);
+    static const bool log = std::getenv("GT_VPLOG") != nullptr;
+    if (log) {
+        static int n = 0;
+        if (n++ % 120 == 0)
+            fprintf(stderr, "[view] cam=%08X vp=%08X (%d %d %d %d / %d %d %d %d) rect=%08X (%d %d %d %d %d)\n", cam, vp,
+                h(vp), h(vp + 2), h(vp + 4), h(vp + 6), h(vp + 8), h(vp + 10), h(vp + 12), h(vp + 14), rect,
+                w(rect), w(rect + 4), w(rect + 8), w(rect + 12), w(rect + 16));
+    }
+    // The viewport is already the full 320x240 frame; only the scissor rect {mode, x0, y0, x1, y1} crops it.
+    // Single-player window only: split-screen rects differ and stay as they are.
+    if (rect < 0x80000000u || rect >= 0x80800000u) return;
+    if (w(rect + 4) == 20 && w(rect + 8) == 16 && w(rect + 12) == 300 && w(rect + 16) == 224) {
+        w(rect + 4) = 0; w(rect + 8) = 0; w(rect + 12) = 320; w(rect + 16) = 240;
+    }
+    // Tell RT64 whether the frame is one full view, so it draws the sky and fades out to the screen's edges too.
+    const bool full = w(rect + 4) == 0 && w(rect + 8) == 0 && w(rect + 12) == 320 && w(rect + 16) == 240;
+    RT64::setFullFrameView(full);
 }

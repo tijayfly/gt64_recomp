@@ -1,5 +1,5 @@
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index 9fae0d4..7f1a57d 100644
+index 9fae0d4..06b4577 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -1669,6 +1669,10 @@ namespace RT64 {
@@ -13,3 +13,14 @@ index 9fae0d4..7f1a57d 100644
                              break;
                          }
                          case Projection::Type::None:
+@@ -1677,6 +1681,10 @@ namespace RT64 {
+                         }
+ 
+                         triangles.scissor = convertFixedRect(call.callDesc.scissorRect, p.resolutionScale, p.fbWidth, invRatioScale, extOriginPercentage, int32_t(horizontalMisalignment), call.callDesc.scissorLeftOrigin, call.callDesc.scissorRightOrigin);
++                        // Extended origins can move the scissor a pixel or two past the left/top edge (misalignment correction):
++                        // negative scissor offsets are invalid and the draw is dropped.
++                        triangles.scissor.left = std::max(triangles.scissor.left, 0);
++                        triangles.scissor.top = std::max(triangles.scissor.top, 0);
+ 
+                         bool usesViewport = (proj.type == Projection::Type::Perspective) || (proj.type == Projection::Type::Orthographic);
+                         if (usesViewport) {
