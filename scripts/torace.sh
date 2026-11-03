@@ -16,4 +16,4 @@ echo A > "$GT_INPUT_FILE"; sleep 12
 DISPLAY=:99 import -window root "$out/race0.png"; sleep "$extra"
 DISPLAY=:99 import -window root "$out/race1.png"
 : > "$GT_INPUT_FILE"
-pkill -f "[b]uild/app/GT64Recompiled"; sleep 1; pkill -9 -f "[b]uild/app/GT64Recompiled"
+pkill -f "^bash scripts/headless"; pkill -f "[b]uild/app/GT64Recompiled"; sleep 1; pkill -9 -f "[b]uild/app/GT64Recompiled"

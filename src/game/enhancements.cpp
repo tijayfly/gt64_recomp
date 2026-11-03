@@ -81,30 +81,32 @@ extern "C" void gt_debug_swap(uint32_t fb) {
     n++;
 }
 
-// Widescreen and full-height 4:3 screens.
-// - The boot logos (licence, GT, Ocean, Imagineer) and the intro are 4:3 pictures whose full-screen fills reach past
-//   the 4:3 frame with RT64's "Expand": while the game is in those modes, render at the original 4:3 aspect ratio
-//   (pillarboxed) and switch back afterwards. Only the runtime's live setting changes; the saved setting is untouched.
-// - The logos, title and menus are drawn inside a 16-line border (y 16..224): zoom the output by 240/208 so they fill
-//   the screen's height. The race and intro views fill the frame (see gt_race_view) and are not zoomed.
+// Widescreen and the 4:3 screens.
+// - Races render with RT64's "Expand" (widescreen). Everything else (boot logos, intro, title, menus) is a 4:3 picture
+//   and renders at the original aspect ratio, pillarboxed. Only the runtime's live setting changes; the saved setting
+//   is untouched. A race is told apart by its full-frame 3D view (gt_race_view), so the switch happens when the race
+//   starts to fade in from black and once it has faded out.
+// - The logos, title and menus are laid out in a 288x208 box at (16, 16) inside a black border. While they are up, RT64
+//   remaps the game's 2D tasks so the box fills the 4:3 frame (and the menus' 3D car models are scaled to match), but
+//   not while the intro's split-screen views are drawn (their windows would no longer line up with their 3D).
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
-namespace RT64 { void setVIZoom(float zoom); void setFullFrameView(bool enabled); }
+namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); }
 
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
     constexpr uint32_t generic_mode = 0x800018A8;  // between modes: keep the previous state
-    constexpr uint32_t logo_modes[] = { 0x8000311C, 0x8000313C, 0x80003388, 0x800033D0, 0x80003400, 0x80003458, 0x800034A0, 0x800034F8 };
     constexpr uint32_t intro_mode = 0x80003540;
-    constexpr uint32_t menu_modes[] = {
-        // Title and attract, mode select, the front-end menus (team/car select, setup) and the round menu.
-        0x80003640, 0x800036A8, 0x80003700, 0x80003760, 0x80003810, 0x80003878, 0x800038D0, 0x8000391C, 0x800039CC,
-        0x80003BB4, 0x80004124, 0x8000416C,
-    };
-    constexpr float border_zoom = 240.0f / 208.0f;
+    // Modes from the round menu's exit on (pre-race, loading, the race, its pause menu, results...): widescreen while
+    // they draw a race (a full-frame 3D view).
+    constexpr uint32_t race_modes_start = 0x80004240;
+    uint32_t full_view_vi = 0;  // last VI on which a full-frame 3D view was built
     bool pillarboxed = false;
-    bool zoomed = false;
+    bool card_remap = false;
+    uint32_t vi_count = 0;
+    uint32_t split_view_vi = 0;  // last VI on which a split (not full-frame) 3D view was built
+    bool menu_3d_scale = false;  // read by gt_race_view
 
     template <size_t N> bool in(const uint32_t (&list)[N], uint32_t v) {
         return std::find(std::begin(list), std::end(list), v) != std::end(list);
@@ -116,6 +118,7 @@ void gt::widescreen_on_vi() {
     if (rdram == nullptr) {
         return;
     }
+    vi_count++;
     const uint32_t mode = *reinterpret_cast<uint32_t*>(rdram + (mode_func_ptr - 0x80000000u));
     static uint32_t last_mode = 0;
     if (mode != last_mode) {
@@ -123,18 +126,26 @@ void gt::widescreen_on_vi() {
         if (log) fprintf(stderr, "[mode] %08X t=%.1f\n", mode, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
         last_mode = mode;
     }
-    if (mode == generic_mode) {
+    // Boot (before the first logo) and the generic in-between mode keep the current state.
+    if (mode == generic_mode || mode < 0x8000311C) {
         return;
     }
 
-    const bool logo = in(logo_modes, mode);
-    const bool pillar = logo || (mode == intro_mode);
-    const bool zoom = logo || in(menu_modes, mode);
+    // Frames are built at 30 FPS or less (much less while loading), so allow a couple of seconds between them.
+    const bool race = (mode >= race_modes_start) && (vi_count - full_view_vi <= 120);
+    {
+        static const bool log = std::getenv("GT_MODELOG") != nullptr;
+        static int last = -1;
+        if (log && int(race) != last) { fprintf(stderr, "[race] %d mode=%08X\n", int(race), mode); last = race; }
+    }
+    const bool pillar = !race;
+    const bool remap = !race && (vi_count - split_view_vi > 2);
+    menu_3d_scale = remap && (mode != intro_mode);
 
-    if (zoom != zoomed) {
-        static const bool no_zoom = std::getenv("GT_NO_ZOOM") != nullptr;
-        RT64::setVIZoom((zoom && !no_zoom) ? border_zoom : 1.0f);
-        zoomed = zoom;
+    if (remap != card_remap) {
+        static const bool no_remap = std::getenv("GT_NO_REMAP") != nullptr;
+        RT64::setCardRemap(remap && !no_remap);
+        card_remap = remap;
     }
 
     using namespace ultramodern::renderer;
@@ -179,4 +190,19 @@ extern "C" void gt_race_view(uint8_t* rdram) {
     // Tell RT64 whether the frame is one full view, so it draws the sky and fades out to the screen's edges too.
     const bool full = w(rect + 4) == 0 && w(rect + 8) == 0 && w(rect + 12) == 320 && w(rect + 16) == 240;
     RT64::setFullFrameView(full);
+    if (!full) {
+        split_view_vi = vi_count;
+    }
+    else if (w(mode_func_ptr) >= race_modes_start) {
+        full_view_vi = vi_count;  // a race (the menus' car models use the same view)
+    }
+    // Menus: scale their 3D (car models) like the card remap scales the 2D around it: the viewport {scale, translate}
+    // (s13.2: 160, 120 / 160, 120) to 320/288 x 240/208.
+    if (vp >= 0x80000000u && vp < 0x80800000u) {
+        const int16_t sx = menu_3d_scale ? 711 : 640, sy = menu_3d_scale ? 554 : 480;
+        if ((h(vp) == 640 || h(vp) == 711) && (h(vp + 2) == 480 || h(vp + 2) == 554) && h(vp + 8) == 640 && h(vp + 10) == 480) {
+            h(vp) = sx;
+            h(vp + 2) = sy;
+        }
+    }
 }
