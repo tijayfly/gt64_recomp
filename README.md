@@ -52,9 +52,10 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   frames, so going into and out of races is clean.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
-- **30 FPS, like the original.** The game times some things by frame, so races and the intro ran too fast at
-  60 FPS, and RT64's frame interpolation flashed blue: the frame rate and refresh rate options are fixed to Original
-  and hidden.
+- **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
+- **60 FPS (under investigation).** The 60 FPS and display refresh rate options are hidden for now. Current issues:
+  - the game times some things per frame, so at 60 FPS races and the intro run too fast;
+  - RT64's interpolated frames (refresh rate set to Display) flash blue.
 
 ## Building
 
