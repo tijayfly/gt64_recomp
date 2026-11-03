@@ -29,8 +29,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 
 - [x] ROM mapped: main code, one front-end code overlay, RSP microcodes
 - [x] libultra functions named (156), so the runtime can replace them
-- [x] Boots through the licence, logos, intro and title, with audio
-- [x] Menus, championship and time trial setup, races, pause menu; logos and menus unfiltered, as on the N64
+- [x] Plays through the licence, logos, intro, title, menus and races, with audio
+- [x] Championship and time trial setup, pause menu; logos and menus unfiltered, as on the N64
 - [x] HUD, unfiltered: rev counter needle and track map (rotated S2DEX sprites); start lights placed for the
   full-frame race view
 - [x] Skies, filtered, including the intro's split-screen views
