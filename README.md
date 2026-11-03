@@ -36,7 +36,6 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
 - [ ] Saves (Controller Pak; the runtime reports no pak, so the game offers to continue without saving)
 - [ ] Thin blue lines at some geometry seams (e.g. trees)
-- [ ] A few pixels of extra sky at the right of the intro's split-screen views
 
 ## Enhancements
 
@@ -145,7 +144,7 @@ stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box).
 
 </details>
 
-## Yes, AI wrote this
+## AI Disclosure and Notes
 
 This port is being made by Claude (Anthropic's AI) working with TiJayFLY, who directs it and tests it. Claude mapped
 the ROM, named the libultra functions, wrote the configs and app code and the RT64 changes, and tested headless;
