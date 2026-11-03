@@ -1,5 +1,5 @@
 diff --git a/src/gbi/rt64_gbi_s2dex.cpp b/src/gbi/rt64_gbi_s2dex.cpp
-index 4b41bfa..7f35826 100644
+index 4b41bfa..11cfc38 100644
 --- a/src/gbi/rt64_gbi_s2dex.cpp
 +++ b/src/gbi/rt64_gbi_s2dex.cpp
 @@ -1,3 +1,5 @@
@@ -123,7 +123,7 @@ index 4b41bfa..7f35826 100644
              const uint8_t lineShiftOffset = (bg.imageSiz == G_IM_SIZ_32b) ? 1 : 0;
              const uint16_t bgLine = bg.imageW >> (2 + bg.imageSiz - lineShiftOffset);
              const uint16_t dsdx = 4 << 10;
-@@ -546,6 +649,126 @@ namespace RT64 {
+@@ -546,6 +649,135 @@ namespace RT64 {
              }
          }
  
@@ -222,9 +222,18 @@ index 4b41bfa..7f35826 100644
 +                return;
 +            }
 +
++            // GT64 fades its races in and out with a grid of 64x32 4-bit tiles over the 4:3 frame. Stretch those to
++            // the window so the fade covers the whole screen in widescreen.
++            const bool fadeTile = (mode == ObjDrawMode::Rectangle) && (texW == 64) && (texH == 32) &&
++                (s.imageFmt == G_IM_FMT_CI) && (s.imageSiz == G_IM_SIZ_4b);
++            const uint8_t savedAspect = rdp->extended.global.rectAspect;
++            if (fadeTile) {
++                rdp->extended.global.rectAspect = G_EX_ASPECT_STRETCH;
++            }
 +            state->startSpriteCommand(0);
 +            rdp->drawTexRect(ulxQ, ulyQ, lrxQ, lryQ, G_TX_RENDERTILE, uls, ult, int16_t(dsdx), int16_t(dtdy), false);
 +            state->endSpriteCommand();
++            rdp->extended.global.rectAspect = savedAspect;
 +        }
 +
 +        void objMoveMem(State *state, DisplayList **dl) {
@@ -250,7 +259,7 @@ index 4b41bfa..7f35826 100644
          void objLoadTxtr(State *state, DisplayList **dl) {
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxtr::start(0x%08X)", (*dl)->w1);
-@@ -573,8 +796,7 @@ namespace RT64 {
+@@ -573,8 +805,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the sprite draw
@@ -260,7 +269,7 @@ index 4b41bfa..7f35826 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxSprite::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -592,8 +814,7 @@ namespace RT64 {
+@@ -592,8 +823,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect draw
@@ -270,7 +279,7 @@ index 4b41bfa..7f35826 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRect::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -611,8 +832,7 @@ namespace RT64 {
+@@ -611,8 +841,7 @@ namespace RT64 {
              doLoadTxtr(state, &obj->txtr);
              
              // Execute the rect r draw
@@ -280,7 +289,7 @@ index 4b41bfa..7f35826 100644
          #ifdef LOG_LOADTXTR_METHODS
              RT64_LOG_PRINTF("objLoadTxRectR::end(0x%08X)", (*dl)->w1);
          #endif
-@@ -620,6 +840,12 @@ namespace RT64 {
+@@ -620,6 +849,12 @@ namespace RT64 {
  
          void reset(State *state) {
              state->rsp->objRenderMode = 0x0;
@@ -293,7 +302,7 @@ index 4b41bfa..7f35826 100644
          }
  
          void setup(GBI *gbi) {
-@@ -645,6 +871,9 @@ namespace RT64 {
+@@ -645,6 +880,9 @@ namespace RT64 {
              gbi->map[S2DEX_G_OBJ_LDTX_SPRITE] = &objLoadTxSprite;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT] = &objLoadTxRect;
              gbi->map[S2DEX_G_OBJ_LDTX_RECT_R] = &objLoadTxRectR;

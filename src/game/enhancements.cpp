@@ -92,8 +92,6 @@ namespace {
     constexpr uint32_t logo_modes[] = {
         // Boot logos, intro and title.
         0x8000311C, 0x8000313C, 0x80003388, 0x800033D0, 0x80003400, 0x80003458, 0x800034A0, 0x800034F8, 0x80003540,
-        // Front-end menus (mode, team and car select), the round menu, and loading into the race.
-        0x80003BB4, 0x8000416C, 0x80004678,
     };
     bool pillarboxed = false;
 }
