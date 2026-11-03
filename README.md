@@ -32,6 +32,7 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] Menus, championship and time trial setup, races, pause menu
 - [x] HUD: rev counter needle and track map (rotated S2DEX sprites)
 - [x] Skies, including the intro's split-screen views
+- [x] Texture filtering as on the N64: sharp 2D (logos, menus, HUD), filtered sky
 - [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake, shoulders shift
 - [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
 - [x] Track seams: hairline cracks between polygons filled at high resolution, with or without MSAA
@@ -48,8 +49,6 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Full-frame 4:3 screens.** The logos, title and menus are laid out in a 288x208 box inside a black border. They
   are stretched to fill the 4:3 frame and pillarboxed. The switch between pillarbox and widescreen happens on black
   frames, so going into and out of races is clean.
-- **Sharp 2D, smooth sky.** Logos, menus and HUD are drawn with point sampling instead of bilinear filtering; the
-  sky is filtered when upscaled.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **No seams in the track.** At high resolutions the sky showed through hairline gaps between track polygons; a pass
   after each 3D frame fills gaps up to an N64 pixel wide with the colour around them (works with MSAA).
