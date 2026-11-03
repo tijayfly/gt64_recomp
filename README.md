@@ -3,6 +3,7 @@
 # GT 64 Recompiled
 
 **GT 64: Championship Edition (N64, 1998), as a native PC program.**
+
 Gamepad support · any resolution · widescreen races · full-frame 4:3 screens
 
 </div>
