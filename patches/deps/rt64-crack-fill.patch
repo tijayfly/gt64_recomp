@@ -41,7 +41,7 @@ index 69a82ac..f878f58 100644
          uint32_t TMEM;
          uint32_t RGBA32;
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index 06b4577..4532b7c 100644
+index 06b4577..9b00b14 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -1299,6 +1299,47 @@ namespace RT64 {
@@ -133,8 +133,8 @@ index 06b4577..4532b7c 100644
 +                    framebuffer.crackFillDepthTexture = depthTarget->texture.get();
 +                }
 +
-+                // Gaps up to about half an N64 pixel.
-+                framebuffer.crackFillRadius = std::max(1, int32_t(std::lround(p.resolutionScale.y * 0.5f)));
++                // Gaps up to about an N64 pixel.
++                framebuffer.crackFillRadius = std::max(1, int32_t(std::lround(p.resolutionScale.y)));
 +            }
 +        }
          targetDrawCall.sceneIndices.clear();

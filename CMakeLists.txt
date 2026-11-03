@@ -80,7 +80,7 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # and sprites drawn with point sampling; filtered, half-strength car shadows.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-full-frame-view.patch)
 # Crack fill: a pass after each 3D framebuffer fills hairline gaps between polygons (pixels farther than the surfaces
-# on both sides, at most half an N64 pixel wide) with the colour around them, as the N64's VI coverage filtering does.
+# on both sides, at most an N64 pixel wide) with the colour around them, as the N64's VI coverage filtering does.
 # At high resolutions the sky showed through seams in the track geometry.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-crack-fill.patch)
 
