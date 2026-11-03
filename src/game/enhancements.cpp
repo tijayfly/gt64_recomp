@@ -132,10 +132,10 @@ void gt::widescreen_on_vi() {
     }
 
     // Frames are built at 30 FPS or less (much less while loading), so allow a couple of seconds between them.
-    // The card box: the menus, title and intro use 288x208 at (16, 16); the boot logo cards end at line 216 (the GT and
-    // Ocean cards' white starts at 16, the Imagineer picture at 8). The Imagineer card fades out over the start of the
-    // intro, so keep its box for the intro's first seconds (the intro's own 3D isn't remapped, and nothing 2D is
-    // drawn again until the title).
+    // The card box: the menus, title and intro use 288x208 at (16, 16). The boot logo cards (GT, Ocean, Imagineer:
+    // one mode, 800034A0, then 800034F8) are 288x208 pictures at (16, 8) whose content is lines 16..216. The Imagineer
+    // card fades out over the start of the intro, so keep its box for the intro's first seconds (the intro's own 3D
+    // isn't remapped, and nothing 2D is drawn again until the title).
     {
         static uint32_t intro_vi = 0;
         static uint32_t prev_mode = 0;
@@ -144,11 +144,7 @@ void gt::widescreen_on_vi() {
         }
         prev_mode = mode;
         int32_t y0 = 16, y1 = 224;
-        if (mode >= 0x8000311C && mode <= 0x80003458) {
-            y1 = 216;
-        }
-        else if (mode == 0x800034A0 || mode == 0x800034F8 || (mode == intro_mode && vi_count - intro_vi < 4 * 60)) {
-            y0 = 8;
+        if (mode == 0x800034A0 || mode == 0x800034F8 || (mode == intro_mode && vi_count - intro_vi < 20 * 60)) {
             y1 = 216;
         }
         static const char* box_env = std::getenv("GT_CARD_BOX_Y");  // debug: "y0,y1"
