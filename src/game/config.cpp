@@ -28,6 +28,27 @@ static void add_graphics_options(recomp::config::Config &config) {
     );
 }
 
+static void add_general_options(recomp::config::Config &config) {
+    using EnumOptionVector = const std::vector<recomp::config::ConfigOptionEnumOption>;
+
+    static EnumOptionVector analog_trigger_options = {
+        {gt::AnalogTriggers::Off, "Off", "Off"},
+        {gt::AnalogTriggers::On, "On", "On"},
+    };
+    config.add_enum_option(
+        gt::configkeys::general::analog_triggers,
+        "Analog Triggers",
+        "<recomp-color primary>On</recomp-color> makes the throttle and brake follow how far you press the triggers "
+        "(or any analog input bound to A and B). <recomp-color primary>Off</recomp-color> is the N64's on/off buttons.",
+        analog_trigger_options,
+        gt::AnalogTriggers::On
+    );
+}
+
+gt::AnalogTriggers gt::get_analog_triggers() {
+    return static_cast<gt::AnalogTriggers>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::analog_triggers)));
+}
+
 template <typename T = uint32_t>
 T get_graphics_config_enum_value(const std::string& option_id) {
     return static_cast<T>(std::get<uint32_t>(recompui::config::get_graphics_config().get_option_value(option_id)));
@@ -89,7 +110,8 @@ void gt::init_config() {
     }
 
     recompui::config::GeneralTabOptions general_options{};
-    recompui::config::create_general_tab(general_options);
+    auto &general_config = recompui::config::create_general_tab(general_options);
+    add_general_options(general_config);
 
     auto &graphics_config = recompui::config::create_graphics_tab();
     add_graphics_options(graphics_config);

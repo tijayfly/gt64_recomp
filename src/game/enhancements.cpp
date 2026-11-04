@@ -1,5 +1,6 @@
 // Native helpers called from recompiler hooks (gt64.us.toml) to implement enhancements.
 #include <cstdint>
+#include <cstring>
 
 #include "gt_config.h"
 
@@ -232,6 +233,129 @@ extern "C" void gt_race_view(uint8_t* rdram) {
         if ((h(vp) == 640 || h(vp) == 711) && (h(vp + 2) == 480 || h(vp + 2) == 554) && h(vp + 8) == 640 && h(vp + 10) == 480) {
             h(vp) = sx;
             h(vp + 2) = sy;
+        }
+    }
+}
+
+// Analog throttle and brake (General > Analog Triggers).
+// The game's per-frame car input routine (func_80033050) sets the car's throttle and brake flags (car +0x200, +0x204:
+// 0 or 0x100) from the A and B bits of its controller's data. The car update then treats each flag as on/off and
+// ramps a pedal position (doubles at car +0x180 throttle, +0x188 brake) towards 1.0 while it's on. With analog
+// triggers, the input hook records how far the inputs bound to A and B are pressed, and the pedal updates
+// (func_8002D8B4, func_8002DB18) are followed by capping the pedal position at that amount, so the game's own ramp
+// still applies but stops where the trigger is.
+#include "recompinput/recompinput.h"
+#include "recompinput/profiles.h"
+#include "recompinput/players.h"
+#include "recompinput/input_state.h"
+
+namespace {
+    // How far the inputs bound to an N64 button are pressed (0..1), on a controller and the keyboard.
+    float n64_button_analog(int player, recompinput::GameInput input) {
+        using namespace recompinput;
+        if (game_input_disabled()) {
+            return 0.0f;
+        }
+        const bool sp = players::is_single_player_mode();
+        const int profiles_for_player[2] = {
+            sp ? profiles::get_sp_controller_profile_index() : profiles::get_input_profile_for_player(player, InputDevice::Controller),
+            sp ? profiles::get_sp_keyboard_profile_index() : profiles::get_input_profile_for_player(player, InputDevice::Keyboard),
+        };
+        float value = 0.0f;
+        for (int profile : profiles_for_player) {
+            if (profile < 0) {
+                continue;
+            }
+            for (size_t i = 0; i < num_bindings_per_input; i++) {
+                value = std::max(value, get_input_analog(player, profiles::get_input_binding(profile, input, i)));
+            }
+        }
+        return std::clamp(value, 0.0f, 1.0f);
+    }
+
+    constexpr float pedal_deadzone = 0.04f;
+
+    float pedal_amount(float value) {
+        return (value <= pedal_deadzone) ? 0.0f : std::min((value - pedal_deadzone) / (1.0f - pedal_deadzone), 1.0f);
+    }
+
+    // Pedal caps for cars driven by a live controller this frame (car address, throttle, brake).
+    struct PedalCap {
+        uint32_t car = 0;
+        float throttle = 1.0f;
+        float brake = 1.0f;
+    };
+    PedalCap pedal_caps[4];
+    uint32_t pedal_car = 0;  // car whose pedal is being updated
+
+    void cap_pedal(uint8_t* rdram, uint32_t addr, float cap) {
+        uint32_t& hi = *reinterpret_cast<uint32_t*>(rdram + (addr - 0x80000000u));
+        uint32_t& lo = *reinterpret_cast<uint32_t*>(rdram + (addr + 4 - 0x80000000u));
+        uint64_t bits = (uint64_t(hi) << 32) | lo;
+        double value;
+        memcpy(&value, &bits, sizeof(value));
+        if (value > double(cap)) {
+            value = double(cap);
+            memcpy(&bits, &value, sizeof(bits));
+            hi = uint32_t(bits >> 32);
+            lo = uint32_t(bits);
+        }
+    }
+}
+
+extern "C" void gt_analog_pedals(uint8_t* rdram, uint32_t control, uint32_t pad) {
+    // pad = &D_800F1420[port] (OSContPad: u16 buttons, s8 x, s8 y, u8 errno, 6 bytes); control = car + 0x200.
+    constexpr uint32_t pads = 0x800F1420;
+    if (pad < pads || ((pad - pads) % 6) != 0 || (pad - pads) / 6 >= 4) {
+        return;
+    }
+    const int port = int((pad - pads) / 6);
+    PedalCap& cap = pedal_caps[port];
+    cap = PedalCap{};
+    if (gt::get_analog_triggers() != gt::AnalogTriggers::On) {
+        return;
+    }
+    const uint16_t buttons = *reinterpret_cast<uint16_t*>(rdram + ((pad ^ 2) - 0x80000000u));
+    float throttle = n64_button_analog(port, recompinput::GameInput::A);
+    float brake = n64_button_analog(port, recompinput::GameInput::B);
+    // Testing: GT_PEDAL_TEST=<amount> stands in for the trigger while A is held (GT_INPUT).
+    static const char* test = std::getenv("GT_PEDAL_TEST");
+    if (test != nullptr && port == 0) {
+        throttle = (buttons & 0x8000) ? float(std::atof(test)) : 0.0f;
+    }
+    // Only cap when the game's A/B bits match the live inputs: the attract-mode demo and replays feed recorded inputs.
+    const bool live_a = throttle >= recompinput::axis_digital_threshold || test != nullptr;
+    const bool live_b = brake >= recompinput::axis_digital_threshold;
+    cap.car = control - 0x200;
+    if (live_a == ((buttons & 0x8000) != 0)) {
+        cap.throttle = pedal_amount(throttle);
+    }
+    if (live_b == ((buttons & 0x4000) != 0)) {
+        cap.brake = pedal_amount(brake);
+    }
+}
+
+extern "C" void gt_pedal_begin(uint32_t car) {
+    pedal_car = car;
+}
+
+extern "C" void gt_pedal_end(uint8_t* rdram, int brake) {
+    for (const PedalCap& cap : pedal_caps) {
+        if (cap.car != 0 && cap.car == pedal_car) {
+            cap_pedal(rdram, pedal_car + (brake ? 0x188 : 0x180), brake ? cap.brake : cap.throttle);
+            static const bool log = std::getenv("GT_PEDAL_LOG") != nullptr;
+            if (log && !brake) {
+                static int n = 0;
+                if ((n++ % 30) == 0) {
+                    uint32_t hi = *reinterpret_cast<uint32_t*>(rdram + (pedal_car + 0x180 - 0x80000000u));
+                    uint32_t lo = *reinterpret_cast<uint32_t*>(rdram + (pedal_car + 0x184 - 0x80000000u));
+                    uint64_t bits = (uint64_t(hi) << 32) | lo; double v; memcpy(&v, &bits, 8);
+                    uint32_t shi = *reinterpret_cast<uint32_t*>(rdram + (pedal_car + 0x158 - 0x80000000u));
+                    uint32_t slo = *reinterpret_cast<uint32_t*>(rdram + (pedal_car + 0x15C - 0x80000000u));
+                    uint64_t sbits = (uint64_t(shi) << 32) | slo; double sp; memcpy(&sp, &sbits, 8);
+                    fprintf(stderr, "[pedals] car %08X throttle cap %.2f pedal %.3f speed %.2f\n", pedal_car, cap.throttle, v, sp);
+                }
+            }
         }
     }
 }

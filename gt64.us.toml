@@ -61,3 +61,31 @@ text = "{ int gt_fps60_enabled(void); if (gt_fps60_enabled()) ctx->r14 = 0; }"
 func = "func_8000A7DC"
 before_vram = 0x8000A7DC
 text = "{ void gt_race_view(uint8_t*); gt_race_view(rdram); }"
+
+# Analog throttle and brake (src/game/enhancements.cpp): after the car input routine sets the throttle and brake
+# flags (a0 = car + 0x200, v1 = the controller's OSContPad), record the trigger amounts; around the throttle and
+# brake pedal updates (a0 = car), cap the pedal positions at those amounts.
+[[patches.hook]]
+func = "func_80033050"
+before_vram = 0x800330B4
+text = "{ void gt_analog_pedals(uint8_t*, uint32_t, uint32_t); gt_analog_pedals(rdram, (uint32_t)ctx->r4, (uint32_t)ctx->r3); }"
+
+[[patches.hook]]
+func = "func_8002D8B4"
+before_vram = 0x8002D8B4
+text = "{ void gt_pedal_begin(uint32_t); gt_pedal_begin((uint32_t)ctx->r4); }"
+
+[[patches.hook]]
+func = "func_8002D800"
+before_vram = 0x8002D8A4
+text = "{ void gt_pedal_end(uint8_t*, int); gt_pedal_end(rdram, 0); }"
+
+[[patches.hook]]
+func = "func_8002DB18"
+before_vram = 0x8002DB18
+text = "{ void gt_pedal_begin(uint32_t); gt_pedal_begin((uint32_t)ctx->r4); }"
+
+[[patches.hook]]
+func = "func_8002DAB0"
+before_vram = 0x8002DAC4
+text = "{ void gt_pedal_end(uint8_t*, int); gt_pedal_end(rdram, 1); }"
