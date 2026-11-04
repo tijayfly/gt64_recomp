@@ -34,7 +34,7 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] HUD, unfiltered: rev counter needle and track map (rotated S2DEX sprites); start lights placed for the
   full-frame race view
 - [x] Skies, filtered, including the intro's split-screen views
-- [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake, shoulders shift
+- [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake (analog), shoulders shift
 - [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
 - [x] Track seams: hairline cracks between polygons filled at high resolution, with or without MSAA
 - [x] Custom app icon
@@ -127,17 +127,20 @@ Hooks in `gt64.us.toml` call native code in `src/game/enhancements.cpp`:
 - the ROM read routine loads and unloads the front-end overlay;
 - the camera routine (`func_8000A7DC`) widens the single-view scissor rect to the full frame and scales the menus'
   car models to match their stretched 2D;
-- on every VI, the game mode (`0x800E8810`) picks widescreen or pillarbox and the 2D box to stretch.
+- the car input routine (`func_80033050`) and the throttle and brake pedal updates (`func_8002D8B4`,
+  `func_8002DB18`): analog triggers cap the game's pedal positions at how far the triggers are pressed;
+- on every VI, the game mode (`0x800E8810`) picks widescreen or pillarbox (re-applied if a settings change brings
+  back the saved aspect ratio) and the 2D box to stretch.
 
 Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake:
 
 - `rt64-s2dex1-objects.patch`: S2DEX 1.x object commands (rectangles, sprites, rotated sprites, LOADTXTR), 4/8-bit
   `bgCopy` and `bg1Cyc` backgrounds, the sky wrapped out to the window's edges, the fade grid covering the frame,
-  point-sampled sprites;
+  point-sampled sprites, the sky drawn filtered;
 - `rt64-full-frame-view.patch`: the 2D remap ("card box" to the full frame, in 2D tasks only), whole-pixel edges,
   one-pixel-short scissors widened (a line at the right edge), no gaps between wrapped rectangles, the softer car
   shadows, flags the game sets (full-frame view, race);
-- `rt64-raw-triangles-aspect.patch`: screen-space triangles keep their 4:3 place in widescreen; filtered sky draws;
+- `rt64-raw-triangles-aspect.patch`: screen-space triangles keep their 4:3 place in widescreen;
 - `rt64-crack-fill.patch`: the crack fill pass (`CrackFillPS.hlsl`, with MSAA variants) and the race view's
   bottom-row fill. Patches that touch the same files are made with `scripts/rt64_patch_diff.sh`;
 - `N64ModernRuntime-screen-update-after-vi-swap.patch`: present after the VI swap (flicker);
@@ -152,7 +155,8 @@ Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake
 controller 1 from a file. `scripts/torace.sh <dir>` drives a run from boot into a Free Run race. Debug switches:
 `GT_MODELOG` (game modes), `GT_VPLOG` (camera view), `GT_TASKLOG`, `GT_STATS`, `GT_NO_REMAP` (turn off the 2D
 stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_CRACK_FILL_DEBUG` (turn off the crack
-fill / show what it fills in magenta), `GT_NO_SHADOW_FIX`.
+fill / show what it fills in magenta), `GT_NO_SHADOW_FIX`, `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A
+is held) / `GT_PEDAL_LOG` (pedal and speed), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
 
 </details>
 
