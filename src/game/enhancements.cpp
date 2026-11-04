@@ -104,6 +104,8 @@ namespace {
     constexpr uint32_t race_modes_start = 0x80004240;
     uint32_t full_view_vi = 0;  // last VI on which a full-frame 3D view was built
     bool pillarboxed = false;
+    // The aspect ratio to go back to after a pillarboxed screen (the saved setting: Expand or Manual).
+    ultramodern::renderer::AspectRatio widescreen_ar = ultramodern::renderer::AspectRatio::Expand;
     bool card_remap = false;
     uint32_t vi_count = 0;
     uint32_t split_view_vi = 0;  // last VI on which a split (not full-frame) 3D view was built
@@ -178,9 +180,19 @@ void gt::widescreen_on_vi() {
     }
 
     using namespace ultramodern::renderer;
+    // Test: GT_AR_RESET_TEST re-applies the widescreen aspect ratio every 300 VIs, as the settings menu does.
+    static const bool ar_reset_test = std::getenv("GT_AR_RESET_TEST") != nullptr;
+    if (ar_reset_test && (vi_count % 300) == 0) {
+        GraphicsConfig config = get_graphics_config();
+        config.ar_option = AspectRatio::Expand;
+        set_graphics_config(config);
+    }
     const GraphicsConfig& current = get_graphics_config();
-    if (pillar && !pillarboxed && current.ar_option == AspectRatio::Expand) {
+    // Checked on every VI, not only on mode changes: the settings menu re-applies the saved graphics settings (e.g. after
+    // changing any option), which brought back the widescreen aspect ratio on a pillarboxed screen.
+    if (pillar && current.ar_option != AspectRatio::Original) {
         GraphicsConfig config = current;
+        widescreen_ar = current.ar_option;
         config.ar_option = AspectRatio::Original;
         set_graphics_config(config);
         pillarboxed = true;
@@ -188,7 +200,7 @@ void gt::widescreen_on_vi() {
     else if (!pillar && pillarboxed) {
         if (current.ar_option == AspectRatio::Original) {
             GraphicsConfig config = current;
-            config.ar_option = AspectRatio::Expand;
+            config.ar_option = widescreen_ar;
             set_graphics_config(config);
         }
         pillarboxed = false;
