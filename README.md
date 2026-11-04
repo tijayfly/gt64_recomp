@@ -50,6 +50,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Full-frame 4:3 screens.** The logos, title and menus are laid out in a 288x208 box inside a black border. They
   are stretched to fill the 4:3 frame and pillarboxed. The switch between pillarbox and widescreen happens on black
   frames, so going into and out of races is clean.
+- **Analog throttle and brake.** With General > Analog Triggers on (the default), the throttle and brake follow how
+  far the triggers (or any analog input bound to A and B) are pressed, on top of the game's own pedal ramp.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
