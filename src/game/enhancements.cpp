@@ -1,6 +1,8 @@
 // Native helpers called from recompiler hooks (gt64.us.toml) to implement enhancements.
 #include <cstdint>
 #include <cstring>
+#include "librecomp/game.hpp"
+#include <cstdio>
 #include <map>
 
 #include "gt_config.h"
@@ -33,6 +35,11 @@ namespace {
 }
 
 extern "C" void gt_on_rom_read(uint32_t rom, uint32_t ram, uint32_t size) {
+    static const bool rom_log = std::getenv("GT_ROM_LOG") != nullptr;
+    if (rom_log) {
+        static double t0 = 0;
+        std::fprintf(stderr, "[rom] %08X -> %08X size %X\n", rom, ram, size);
+    }
     bool overlaps = ram < ovl_front_ram + ovl_front_text_size && ram + size > ovl_front_ram;
     if (rom == ovl_front_rom && ram == ovl_front_ram) {
         if (!ovl_front_loaded) {
@@ -94,7 +101,7 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
-namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); }
+namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); void setFarScale(float scale); }
 
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
@@ -217,6 +224,12 @@ void gt::widescreen_on_vi() {
         if (log && int(race) != last) { fprintf(stderr, "[race] %d mode=%08X t=%.2f\n", int(race), mode, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count()); last = race; }
     }
     RT64::setRaceHoleFill(race);
+    // Draw distance: move the race camera's far plane out and always take the depth branches (cull and LOD).
+    static const float far_scale = [] {
+        const char* v = std::getenv("GT_FAR_SCALE");
+        return v != nullptr ? float(std::atof(v)) : 16.0f;
+    }();
+    RT64::setFarScale(race ? far_scale : 1.0f);
     // Into a race, the game cross-fades from the last 4:3 frame (the start card) to the race, so switching the aspect
     // ratio as the race appears stretched the card for a moment. Fade the output through black instead: fade out
     // (still pillarboxed) as the card ends, hold black through loading until the race mode has begun and the
@@ -325,6 +338,58 @@ void gt::widescreen_on_vi() {
 
 // Race view (see gt64.us.toml).
 extern "C" void gt_race_view(uint8_t* rdram) {
+    static const bool list_log = std::getenv("GT_LIST_LOG") != nullptr;
+    if (list_log) {
+        static int n = 0;
+        if ((n++ % 90) == 0) {
+            uint32_t node = *reinterpret_cast<uint32_t*>(rdram + 0x11A648);
+            int count = 0, parts = 0;
+            while (node >= 0x80000000u && node < 0x80800000u && count < 10000) {
+                count++;
+                uint32_t part = *reinterpret_cast<uint32_t*>(rdram + (node - 0x80000000u) + 0x14);
+                while (part >= 0x80000000u && part < 0x80800000u && *reinterpret_cast<uint32_t*>(rdram + (part - 0x80000000u)) != 0 && parts < 100000) {
+                    parts++;
+                    part += 0x1C;
+                }
+                node = *reinterpret_cast<uint32_t*>(rdram + (node - 0x80000000u) + 0x10);
+            }
+            std::printf("[list] head %08X nodes %d parts %d\n", *reinterpret_cast<uint32_t*>(rdram + 0x11A648), count, parts);
+        }
+    }
+    static const bool cull_log = std::getenv("GT_CULL_LOG") != nullptr;
+    if (cull_log) {
+        static bool once = false;
+        if (!once) {
+            once = true;
+            for (uint32_t a = 0x800AA5F8; a < 0x800AA648; a += 8) {
+                const uint32_t hi = *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u));
+                const uint32_t lo = *reinterpret_cast<uint32_t*>(rdram + (a + 4 - 0x80000000u));
+                const uint64_t bits = (uint64_t(hi) << 32) | lo;
+                double d; std::memcpy(&d, &bits, 8);
+                std::printf("[cull] %08X = %g\n", a, d);
+            }
+        }
+    }
+    if (cull_log) {
+        static int m = 0;
+        if ((m++ % 150) == 0) {
+            const uint32_t cam = *reinterpret_cast<uint32_t*>(rdram + 0x10FFCC);
+            if (cam >= 0x80000000u && cam < 0x80800000u) {
+                auto h = [&](uint32_t off) { return int(*reinterpret_cast<int16_t*>(rdram + ((cam + off) ^ 2) - 0x80000000u)); };
+                std::printf("[cull] cam %08X section %d dir %d ahead %d behind %d short %d of %d\n", cam, h(0xF8), h(0xFA), h(0xFC), h(0xFE), h(0x100),
+                    int(*reinterpret_cast<int16_t*>(rdram + (0x114588 ^ 2))));
+            }
+        }
+    }
+    static const bool fog_log = std::getenv("GT_FOG_LOG") != nullptr;
+    if (fog_log) {
+        static int n = 0;
+        if ((n++ % 300) == 0) {
+            const uint32_t c = *reinterpret_cast<uint32_t*>(rdram + 0x11A624);
+            std::printf("[fog] max %d colour %08X a630 %04X a620 %04X\n", int32_t(*reinterpret_cast<uint32_t*>(rdram + 0x11A628)), c,
+                *reinterpret_cast<uint16_t*>(rdram + (0x11A630 ^ 2)), *reinterpret_cast<uint16_t*>(rdram + (0x11A620 ^ 2)));
+        }
+    }
     auto w = [&](uint32_t a) -> uint32_t& { return *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u)); };
     auto h = [&](uint32_t a) -> int16_t& { return *reinterpret_cast<int16_t*>(rdram + ((a ^ 2) - 0x80000000u)); };
     uint32_t cam = w(0x8010FFCC);
@@ -592,4 +657,232 @@ extern "C" void gt_pedal_end(uint8_t* rdram, int brake) {
             }
         }
     }
+}
+
+extern "C" void gt_cull_candidates(uint8_t* rdram, uint32_t objects, uint32_t count) {
+    static const bool log = std::getenv("GT_CULL_LOG") != nullptr;
+    if (log) {
+        static int n = 0;
+        if ((n++ % 30) == 0) {
+            std::printf("[cull] objects %08X count %u zone %u\n", objects, count & 0xFFFF, *reinterpret_cast<uint8_t*>(rdram + (0x11A595 ^ 3)));
+        }
+    }
+}
+
+extern "C" void gt_buffer_use(uint8_t* rdram) {
+    static const bool log = std::getenv("GT_CULL_LOG") != nullptr;
+    if (!log) return;
+    auto w = [&](uint32_t a) { return *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u)); };
+    const uint32_t idx = *reinterpret_cast<uint8_t*>(rdram + (0x8011A597u ^ 3) - 0x80000000u) ^ 1;
+    const uint32_t gfx_start = 0x800FBFC8u + idx * 0xA000u;
+    const uint32_t mtx_start = 0x8011EA48u + idx * 0x6280u;
+    static uint32_t max_gfx = 0, max_mtx = 0;
+    const uint32_t gfx = w(0x8010FFC8u) - gfx_start, mtx = w(0x8012AF48u) - mtx_start;
+    if (gfx < 0x100000u) max_gfx = std::max(max_gfx, gfx);
+    if (mtx < 0x100000u) max_mtx = std::max(max_mtx, mtx);
+    static int n = 0;
+    if ((n++ % 30) == 0) std::printf("[cull] gfx %X (max %X of A000) mtx %X (max %X of 6280)\n", gfx, max_gfx, mtx, max_mtx);
+}
+
+// Draw distance. The race view draws the track as a ring of sections (D_80114588 + 1 of them, 0x28 bytes each): the
+// camera's current one and a fixed number behind and ahead (camera +0xFE / +0xFC, or +0x100 facing the other way), about
+// 7 and 11, in func_8000A350. Drawing all of them needs more list nodes than the game's pool holds (128 nodes of 0x28 at
+// D_8011A638..D_8011BA38) and more matrices than its buffers (0x6280 bytes each at D_8011EA48), so nodes past the pool
+// and all matrices go to the Expansion Pak's 4 MB, which GT64 doesn't use.
+namespace {
+    constexpr uint32_t ext_nodes = 0x80400000u;     // list nodes past the game's pool
+    constexpr uint32_t ext_matrices = 0x80480000u;  // two matrix buffers of 0x40000
+    constexpr uint32_t ext_matrix_size = 0x40000u;
+
+    bool draw_all_sections() {
+        static const bool off = std::getenv("GT_NO_DRAW_DISTANCE") != nullptr;
+        return !off;
+    }
+    // Testing: GT_DD_PARTS bit mask (1 sections, 2 scenery, 4 matrices).
+    bool dd_part(int bit) {
+        static const int mask = std::getenv("GT_DD_PARTS") ? std::atoi(std::getenv("GT_DD_PARTS")) : 7;
+        return (mask & bit) != 0;
+    }
+
+    uint32_t rd32(uint8_t* rdram, uint32_t a) { return *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u)); }
+    void wr32(uint8_t* rdram, uint32_t a, uint32_t v) { *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u)) = v; }
+    void wr16(uint8_t* rdram, uint32_t a, uint16_t v) { *reinterpret_cast<uint16_t*>(rdram + ((a ^ 2) - 0x80000000u)) = v; }
+    uint16_t rd16(uint8_t* rdram, uint32_t a) { return *reinterpret_cast<uint16_t*>(rdram + ((a ^ 2) - 0x80000000u)); }
+    double rd64f(uint8_t* rdram, uint32_t a) {
+        const uint64_t bits = (uint64_t(rd32(rdram, a)) << 32) | rd32(rdram, a + 4);
+        double d;
+        std::memcpy(&d, &bits, sizeof(d));
+        return d;
+    }
+    void wr64f(uint8_t* rdram, uint32_t a, double d) {
+        uint64_t bits;
+        std::memcpy(&bits, &d, sizeof(d));
+        wr32(rdram, a, uint32_t(bits >> 32));
+        wr32(rdram, a + 4, uint32_t(bits));
+    }
+    void wr32f(uint8_t* rdram, uint32_t a, float f) {
+        uint32_t bits;
+        std::memcpy(&bits, &f, sizeof(f));
+        wr32(rdram, a, bits);
+    }
+
+    int32_t section_ring(uint8_t* rdram) {
+        static const int cap = std::getenv("GT_DD_SECTIONS") ? std::atoi(std::getenv("GT_DD_SECTIONS")) : 100000;
+        return std::min(int32_t(rd16(rdram, 0x80114588u)) + 1, int32_t(cap));
+    }
+}
+
+extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
+    if (!draw_all_sections()) {
+        return count;
+    }
+    if (dd_part(2)) {
+    // Scenery outside the track ring (func_80009698): always draw within any distance, not 1000 / 7000 / 200 units.
+    wr64f(rdram, 0x800AA608u, 1e12);
+    wr64f(rdram, 0x800AA610u, 1e12);
+    wr64f(rdram, 0x800AA618u, 1e12);
+    }
+    if (!dd_part(1)) return count;
+    return std::max(count, (section_ring(rdram) - 1) / 2);
+}
+
+extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
+    static const bool seglog = std::getenv("GT_SEG_LOG") != nullptr;
+    if (seglog) {
+        static int n = 0;
+        if ((n++ % 300) == 0) {
+            const uint32_t cam = rd32(rdram, 0x8010FFCCu);
+            const int cur = int16_t(rd16(rdram, cam + 0xF8));
+            std::printf("[seg] current %d\n", cur);
+            const uint32_t base = rd32(rdram, 0x80114584u);
+            const int ring = int32_t(rd16(rdram, 0x80114588u)) + 1;
+            for (int i = 0; i < ring; i++) {
+                const uint32_t sec = base + i * 0x28;
+                const uint16_t seg = rd16(rdram, sec + 0x24);
+                const uint32_t te = 0x80160950u + seg * 20;
+                const uint32_t parts = rd32(rdram, sec);
+                std::printf("[seg] %3d seg %3u tab %08X %08X %08X %08X %08X parts %08X dl0 %08X\n", i, seg, rd32(rdram, te), rd32(rdram, te + 4),
+                    rd32(rdram, te + 8), rd32(rdram, te + 12), rd32(rdram, te + 16), parts,
+                    (parts >= 0x80000000u && parts < 0x80800000u) ? rd32(rdram, parts) : 0);
+            }
+        }
+    }
+    if (!draw_all_sections()) {
+        return count;
+    }
+    if (!dd_part(1)) return count;
+    const int32_t ring = section_ring(rdram);
+    return std::max(count, ring - 1 - (ring - 1) / 2);
+}
+
+// func_8000A280, rewritten: append a list node for track section `section` after the pool's last node, with the node
+// past the game's pool going to the Expansion Pak.
+extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
+    constexpr uint32_t pool_ptr = 0x8011BA38u;
+    constexpr uint32_t pool_end = 0x8011BA38u;
+    const uint32_t tail = rd32(rdram, pool_ptr);
+    uint32_t node = tail + 0x28;
+    if (tail < ext_nodes && node + 0x28 > pool_end) {
+        node = ext_nodes;
+    }
+    wr32(rdram, pool_ptr, node);
+    wr32(rdram, node + 0x10, rd32(rdram, tail + 0x10));
+    wr32(rdram, tail + 0x10, node);
+    wr16(rdram, node + 0x0, rd16(rdram, section + 0x24));
+    wr16(rdram, node + 0x2, rd16(rdram, section + 0x26));
+    wr32(rdram, node + 0x14, rd32(rdram, section + 0x0));
+    const uint32_t cam = rd32(rdram, 0x8010FFCCu);
+    wr32f(rdram, node + 0x18, float(rd64f(rdram, section + 0x08) - rd64f(rdram, cam + 0xD8)));
+    wr32f(rdram, node + 0x1C, float(rd64f(rdram, section + 0x10) - rd64f(rdram, cam + 0xE0)));
+    wr32f(rdram, node + 0x20, float(rd64f(rdram, section + 0x18) - rd64f(rdram, cam + 0xE8)));
+}
+
+// The frame's matrix buffer (D_8012AF48, set per frame from buffer index `index`): in the Expansion Pak, 0x40000 each.
+static uint32_t gfx_frame_start = 0;
+extern "C" void gt_gfx_after_track(uint8_t* rdram) {
+    static const bool log = std::getenv("GT_CULL_LOG") != nullptr;
+    if (!log) return;
+    static uint32_t max_used = 0;
+    const uint32_t used = rd32(rdram, 0x8010FFC8u) - gfx_frame_start;
+    if (used < 0x100000u) max_used = std::max(max_used, used);
+    static int n = 0;
+    if ((n++ % 60) == 0) std::printf("[cull] gfx after track %X (max %X of A000), matrices %X\n", used, max_used, rd32(rdram, 0x8012AF48u));
+}
+
+extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
+    gfx_frame_start = rd32(rdram, 0x8010FFC8u);
+    if (draw_all_sections() && dd_part(4)) {
+        wr32(rdram, 0x8012AF48u, ext_matrices + (index & 1) * ext_matrix_size);
+    }
+}
+
+// Track geometry is streamed: each section's chunk (segment 0x0B, a slice of one contiguous block of ROM) is DMAed into a
+// cache slot only while it's near the camera, and its entry in the chunk table (D_80160950, 20 bytes: RAM address or -1,
+// ROM address, size, offset in the segment, slot size) says where. Far sections now drawn find no chunk, so keep a
+// copy of the whole block in the Expansion Pak (read once per track) and point segment 0x0B at it for those
+// (func_8000A570 sets the segment to RAM address - offset for each node's chunk).
+namespace {
+    constexpr uint32_t ext_track = 0x80500000u;
+    constexpr uint32_t ext_track_size = 0x300000u;
+    constexpr uint32_t chunk_table = 0x80160950u;
+    uint32_t ext_track_rom = 0;
+}
+
+extern "C" void gt_track_segment(uint8_t* rdram, recomp_context* ctx) {
+    if (!draw_all_sections() || uint32_t(ctx->r8) != 0xFFFFFFFFu) {
+        return;
+    }
+    // The block's ROM address, from any chunk that's loaded.
+    uint32_t rom_base = 0;
+    for (uint32_t i = 0; i < 512; i++) {
+        const uint32_t entry = chunk_table + i * 20;
+        if (rd32(rdram, entry) != 0xFFFFFFFFu && rd32(rdram, entry) >= 0x80000000u && rd32(rdram, entry + 4) != 0) {
+            rom_base = rd32(rdram, entry + 4) - rd32(rdram, entry + 12);
+            break;
+        }
+    }
+    const auto rom = recomp::get_rom();
+    if (rom_base == 0 || rom_base >= rom.size()) {
+        return;
+    }
+    if (rom_base != ext_track_rom) {
+        const size_t size = std::min<size_t>(ext_track_size, rom.size() - rom_base);
+        for (size_t i = 0; i < size; i++) {
+            rdram[((ext_track + i) ^ 3) - 0x80000000u] = rom[rom_base + i];
+        }
+        ext_track_rom = rom_base;
+    }
+    static const bool cmp = std::getenv("GT_SEG_CMP") != nullptr;
+    if (cmp) {
+        static int done = 0;
+        if (done < 3) {
+            for (uint32_t i = 0; i < 512; i++) {
+                const uint32_t entry = chunk_table + i * 20;
+                const uint32_t ram = rd32(rdram, entry);
+                if (ram == 0xFFFFFFFFu || ram < 0x80000000u) continue;
+                const uint32_t off = rd32(rdram, entry + 12), size = rd32(rdram, entry + 8);
+                uint32_t diffs = 0, first = 0xFFFFFFFF;
+                for (uint32_t b = 0; b < size; b += 4) {
+                    if (rd32(rdram, ram + b) != rd32(rdram, ext_track + off + b)) { diffs++; if (first == 0xFFFFFFFF) first = b; }
+                }
+                std::printf("[segcmp] chunk %u ram %08X off %X size %X rom %X: %u words differ, first at %X (%08X vs %08X)\n", i, ram, off, size,
+                    rd32(rdram, entry + 4), diffs, first, first != 0xFFFFFFFF ? rd32(rdram, ram + first) : 0, first != 0xFFFFFFFF ? rd32(rdram, ext_track + off + first) : 0);
+                done++;
+                if (done >= 3) break;
+            }
+        }
+    }
+    ctx->r8 = int32_t(ext_track);
+    ctx->r9 = 0;
+}
+
+extern "C" void gt_race_task(uint8_t* rdram, uint32_t start, uint32_t size) {
+    static const bool log = std::getenv("GT_CULL_LOG") != nullptr;
+    if (!log) return;
+    static uint32_t max_end = 0;
+    const uint32_t end = start + size;
+    max_end = std::max(max_end, end);
+    static int n = 0;
+    if ((n++ % 60) == 0) std::printf("[cull] race task %08X size %X end %08X (max end %08X; buffers %08X / %08X, end %08X)\n", start, size, end, max_end,
+        0x800FBFC8u, 0x800FBFC8u + 0xA000u, 0x800FBFC8u + 0x14000u);
 }

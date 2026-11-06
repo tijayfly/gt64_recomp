@@ -83,6 +83,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # on both sides, at most an N64 pixel wide) with the colour around them, as the N64's VI coverage filtering does.
 # At high resolutions the sky showed through seams in the track geometry.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-crack-fill.patch)
+# Work in progress (draw-distance branch): race camera far plane moved out with fog kept in place, forced LOD branches,
+# and debug logging for the draw distance work.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-draw-distance.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 
