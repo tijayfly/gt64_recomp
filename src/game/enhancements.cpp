@@ -163,7 +163,13 @@ void gt::widescreen_on_vi() {
         }
     }
 
-    const bool race = (mode >= race_modes_start) && (vi_count - full_view_vi <= 120);
+    // Once a race is running, leaving the race and pause modes ends it: the game changes mode on the black frames
+    // before the results and menus, so the switch back to 4:3 happens there instead of seconds later on the next
+    // screen. (The pause menu stops building race views, so a short time-out would switch it back to 4:3.)
+    constexpr uint32_t pause_mode = 0x80004940;
+    static bool racing = false;
+    const bool in_race_mode = (mode == 0x800046C4) || (mode == pause_mode);
+    const bool race = (mode >= race_modes_start) && (vi_count - full_view_vi <= 120) && (!racing || in_race_mode);
     {
         static const bool log = std::getenv("GT_MODELOG") != nullptr;
         static int last = -1;
@@ -237,6 +243,7 @@ void gt::widescreen_on_vi() {
             RT64::setOutputBrightness(1.0f);
         }
     }
+    racing = race && (transition == 0) && !pillarboxed;
     const bool pillar = !race || transition == 1 || transition == 2;  // (loading modes aren't races, so they pillarbox)
     const bool remap = !race && (vi_count - split_view_vi > 2);
     menu_3d_scale = remap && (mode != intro_mode);
