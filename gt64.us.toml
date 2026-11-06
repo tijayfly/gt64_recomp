@@ -155,3 +155,9 @@ func = "func_8000A570"
 before_vram = 0x8000A624
 text = "{ void gt_track_segment(uint8_t*, recomp_context*); gt_track_segment(rdram, ctx); }"
 
+
+# Save requests (the save thread's dispatcher): logged with GT_PAK_LOG.
+[[patches.hook]]
+func = "func_80005B80"
+before_vram = 0x80005B80
+text = "{ void gt_save_request(uint8_t*, uint32_t); gt_save_request(rdram, (uint32_t)ctx->r4); }"

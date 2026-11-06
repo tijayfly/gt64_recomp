@@ -202,6 +202,8 @@ if (WIN32)
             $<TARGET_FILE_DIR:GT64Recompiled>)
 
     target_link_libraries(GT64Recompiled PRIVATE SDL2 Winmm.lib)
+    # A link map beside the exe, to turn the crash log's exe offsets into function names.
+    target_link_options(GT64Recompiled PRIVATE /MAP)
 endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")

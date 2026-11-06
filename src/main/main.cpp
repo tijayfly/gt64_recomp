@@ -72,6 +72,59 @@ static void install_crash_handler() {
         signal(sig, crash_handler);
     }
 }
+#elif defined(_WIN32)
+#include <windows.h>
+#include <psapi.h>
+
+// Windows: stderr goes to GT64Recompiled.log beside the exe, and a crash writes its address there: the exe's offset
+// (for addr2line against the build) and the nearest symbol if one is known.
+static LONG WINAPI crash_filter(EXCEPTION_POINTERS* info) {
+    const uintptr_t address = reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress);
+    HMODULE module = nullptr;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(address), &module);
+    char module_name[MAX_PATH] = "?";
+    if (module != nullptr) {
+        GetModuleFileNameA(module, module_name, MAX_PATH);
+    }
+    fprintf(stderr, "\nFatal exception 0x%08lX at %p (%s + 0x%llx)\n", info->ExceptionRecord->ExceptionCode,
+        info->ExceptionRecord->ExceptionAddress, module_name,
+        (unsigned long long)(address - reinterpret_cast<uintptr_t>(module)));
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2) {
+        fprintf(stderr, "  %s address %p\n", info->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+            reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]));
+    }
+    // Return addresses on the stack that fall inside the exe: a rough backtrace.
+    const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+    MODULEINFO mi{};
+    if (K32GetModuleInformation(GetCurrentProcess(), GetModuleHandleA(nullptr), &mi, sizeof(mi))) {
+        const uintptr_t* sp = reinterpret_cast<const uintptr_t*>(info->ContextRecord->Rsp);
+        int found = 0;
+        for (int i = 0; i < 4096 && found < 24; i++) {
+            const uintptr_t v = sp[i];
+            if (v >= base && v < base + mi.SizeOfImage) {
+                fprintf(stderr, "  stack: exe + 0x%llx\n", (unsigned long long)(v - base));
+                found++;
+            }
+        }
+    }
+    fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void install_crash_handler() {
+    char path[MAX_PATH];
+    const DWORD length = GetModuleFileNameA(nullptr, path, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        std::string log_path(path, length);
+        const size_t slash = log_path.find_last_of("\\/");
+        log_path = log_path.substr(0, slash + 1) + "GT64Recompiled.log";
+        if (freopen(log_path.c_str(), "w", stderr) != nullptr) {
+            setvbuf(stderr, nullptr, _IONBF, 0);
+        }
+    }
+    SetUnhandledExceptionFilter(crash_filter);
+}
 #else
 static void install_crash_handler() {}
 #endif
