@@ -55,8 +55,6 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Analog throttle and brake.** With General > Analog Triggers on (the default), the throttle and brake follow how
   far the triggers (or any analog input bound to A and B) are pressed, on top of the game's own pedal ramp.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
-- **Clearer credits.** The credits' landmark stops drop the large translucent box over the view and keep the
-  landmark's name.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
 - **60 FPS (under investigation).** The 60 FPS and display refresh rate options are hidden for now. Current issues:
