@@ -149,7 +149,7 @@ index 2970e71..2e612f8 100644
  
          // Assign the indices or increase the count of the active sprite command if it exists.
 diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
-index a870166..41b50fb 100644
+index a870166..c9ca7b5 100644
 --- a/src/hle/rt64_vi.cpp
 +++ b/src/hle/rt64_vi.cpp
 @@ -3,6 +3,8 @@
@@ -161,7 +161,7 @@ index a870166..41b50fb 100644
  #include <cassert>
  #include <memory.h>
  #include <stdio.h>
-@@ -15,6 +17,76 @@
+@@ -15,6 +17,87 @@
  namespace RT64 {
      // VI
      
@@ -175,6 +175,17 @@ index a870166..41b50fb 100644
 +
 +    bool isFullFrameView() {
 +        return fullFrameView.load();
++    }
++
++    // Output brightness set by the game (GT64 fades through black while its aspect ratio switches). 1 = normal.
++    static std::atomic<float> outputBrightness{ 1.0f };
++
++    void setOutputBrightness(float brightness) {
++        outputBrightness.store(std::clamp(brightness, 0.0f, 1.0f));
++    }
++
++    float getOutputBrightness() {
++        return outputBrightness.load();
 +    }
 +
 +    // Set by the game during races: fill the empty bottom rows of the 3D view (see CrackFillPS.hlsl).
@@ -239,7 +250,7 @@ index a870166..41b50fb 100644
          return { 0.0f, 0.0f, 1.0f, 1.0f };
      }
 diff --git a/src/hle/rt64_vi.h b/src/hle/rt64_vi.h
-index 5b70e01..3aaa11e 100644
+index 5b70e01..5630c8d 100644
 --- a/src/hle/rt64_vi.h
 +++ b/src/hle/rt64_vi.h
 @@ -4,6 +4,8 @@
@@ -251,7 +262,7 @@ index 5b70e01..3aaa11e 100644
  #include <array>
  #include <stdint.h>
  
-@@ -21,6 +23,21 @@
+@@ -21,6 +23,23 @@
  #define VI_STATUS_AA_MODE_NONE 3
  
  namespace RT64 {
@@ -268,8 +279,47 @@ index 5b70e01..3aaa11e 100644
 +    void setFullFrameView(bool enabled);
 +    bool isFullFrameView();
 +    void setRaceHoleFill(bool enabled);
++    void setOutputBrightness(float brightness);
++    float getOutputBrightness();
 +    bool isRaceHoleFill();
 +
      struct VI {
          union Status {
              struct {
+diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
+index b4ff4e9..db555ae 100644
+--- a/src/render/rt64_vi_renderer.cpp
++++ b/src/render/rt64_vi_renderer.cpp
+@@ -77,6 +77,7 @@ namespace RT64 {
+         pushConstants.videoResolution = computeHDSize(hlslpp::float2(p.vi->fbSize()), p.resolutionScale, p.downsamplingScale);
+         pushConstants.textureResolution = { float(p.textureWidth), float(p.textureHeight) };
+         pushConstants.gamma = p.vi->gamma();
++        pushConstants.brightness = getOutputBrightness();
+ 
+         p.commandList->setPipeline(shader->pipeline.get());
+         p.commandList->setGraphicsPipelineLayout(shader->pipelineLayout.get());
+diff --git a/src/shaders/VideoInterfacePS.hlsl b/src/shaders/VideoInterfacePS.hlsl
+index 3f33475..0ca8262 100644
+--- a/src/shaders/VideoInterfacePS.hlsl
++++ b/src/shaders/VideoInterfacePS.hlsl
+@@ -16,7 +16,7 @@ float4 SampleInput(float2 uv) {
+     float2 outsideBorder = step(LowerRight, uv);
+     float4 sampledColor = gInput.SampleLevel(gSampler, clamp(uv, HalfPixel, LowerRight - HalfPixel), 0);
+     float4 gammaCorrectedColor = pow(sampledColor, gConstants.gamma);
+-    gammaCorrectedColor.rgb *= max(1.0f - outsideBorder.x - outsideBorder.y, 0.0f);
++    gammaCorrectedColor.rgb *= max(1.0f - outsideBorder.x - outsideBorder.y, 0.0f) * gConstants.brightness;
+     gammaCorrectedColor.a = 1.0f;
+     return gammaCorrectedColor;
+ }
+diff --git a/src/shared/rt64_video_interface.h b/src/shared/rt64_video_interface.h
+index b51cf09..a18c7eb 100644
+--- a/src/shared/rt64_video_interface.h
++++ b/src/shared/rt64_video_interface.h
+@@ -13,6 +13,7 @@ namespace interop {
+         float2 videoResolution;
+         float2 textureResolution;
+         float gamma;
++        float brightness;
+     };
+ #ifdef HLSL_CPU
+ };

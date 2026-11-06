@@ -93,7 +93,7 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
-namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); }
+namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); }
 
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
@@ -110,6 +110,7 @@ namespace {
     uint32_t vi_count = 0;
     uint32_t split_view_vi = 0;  // last VI on which a split (not full-frame) 3D view was built
     bool menu_3d_scale = false;  // read by gt_race_view
+    uint32_t race_view_frames = 0;  // full-frame race views built (one per game frame)
 
     template <size_t N> bool in(const uint32_t (&list)[N], uint32_t v) {
         return std::find(std::begin(list), std::end(list), v) != std::end(list);
@@ -126,7 +127,7 @@ void gt::widescreen_on_vi() {
     static uint32_t last_mode = 0;
     if (mode != last_mode) {
         static const bool log = std::getenv("GT_MODELOG") != nullptr;
-        if (log) fprintf(stderr, "[mode] %08X t=%.1f\n", mode, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        if (log) fprintf(stderr, "[mode] %08X t=%.2f\n", mode, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
         last_mode = mode;
     }
     // Boot (before the first logo) and the generic in-between mode keep the current state.
@@ -166,10 +167,50 @@ void gt::widescreen_on_vi() {
     {
         static const bool log = std::getenv("GT_MODELOG") != nullptr;
         static int last = -1;
-        if (log && int(race) != last) { fprintf(stderr, "[race] %d mode=%08X\n", int(race), mode); last = race; }
+        if (log && int(race) != last) { fprintf(stderr, "[race] %d mode=%08X t=%.2f\n", int(race), mode, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count()); last = race; }
     }
     RT64::setRaceHoleFill(race);
-    const bool pillar = !race;
+    // Into a race, the game cross-fades from the last 4:3 frame (the start card) to the race, so switching the aspect
+    // ratio as the race appears stretched the card for a moment. Fade the output through black instead: fade out
+    // (still pillarboxed), hold black until the race mode has begun and the cross-fade is over, switch, fade in.
+    constexpr uint32_t race_mode = 0x800046C4;
+    // The cross-fade lasts about 20 game frames: hold for 24 frames from the first race frame (and at least ~0.5 s).
+    constexpr uint32_t fade_out_vis = 8, hold_min_vis = 24, hold_max_vis = 300, fade_in_vis = 15, crossfade_frames = 24;
+    static int transition = 0;  // 0 none, 1 fading out, 2 black, 3 fading in
+    static uint32_t transition_vi = 0;
+    static uint32_t transition_swap = 0;
+    if (!race && transition != 0) {
+        transition = 0;
+        RT64::setOutputBrightness(1.0f);
+    }
+    if (race && pillarboxed && transition == 0) {
+        transition = 1;
+        transition_vi = vi_count;
+        transition_swap = race_view_frames;
+    }
+    const uint32_t t = vi_count - transition_vi;
+    if (transition == 1) {
+        RT64::setOutputBrightness(1.0f - float(t) / fade_out_vis);
+        if (t >= fade_out_vis) {
+            transition = 2;
+            transition_vi = vi_count;
+        }
+    }
+    else if (transition == 2) {
+        RT64::setOutputBrightness(0.0f);
+        if ((mode == race_mode && t >= hold_min_vis && race_view_frames - transition_swap >= crossfade_frames) || t >= hold_max_vis) {
+            transition = 3;
+            transition_vi = vi_count;
+        }
+    }
+    else if (transition == 3) {
+        RT64::setOutputBrightness(float(t) / fade_in_vis);
+        if (t >= fade_in_vis) {
+            transition = 0;
+            RT64::setOutputBrightness(1.0f);
+        }
+    }
+    const bool pillar = !race || transition == 1 || transition == 2;
     const bool remap = !race && (vi_count - split_view_vi > 2);
     menu_3d_scale = remap && (mode != intro_mode);
 
@@ -237,6 +278,7 @@ extern "C" void gt_race_view(uint8_t* rdram) {
     }
     else if (w(mode_func_ptr) >= race_modes_start) {
         full_view_vi = vi_count;  // a race (the menus' car models use the same view)
+        race_view_frames++;
     }
     // Menus: scale their 3D (car models) like the card remap scales the 2D around it: the viewport {scale, translate}
     // (s13.2: 160, 120 / 160, 120) to 320/288 x 240/208.
