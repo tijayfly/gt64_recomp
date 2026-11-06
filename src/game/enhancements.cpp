@@ -110,7 +110,7 @@ namespace {
     uint32_t vi_count = 0;
     uint32_t split_view_vi = 0;  // last VI on which a split (not full-frame) 3D view was built
     bool menu_3d_scale = false;  // read by gt_race_view
-    uint32_t race_view_frames = 0;  // full-frame race views built (one per game frame)
+    uint32_t race_view_frames = 0;  // full-frame race views built (by several cameras each frame)
 
     template <size_t N> bool in(const uint32_t (&list)[N], uint32_t v) {
         return std::find(std::begin(list), std::end(list), v) != std::end(list);
@@ -172,21 +172,37 @@ void gt::widescreen_on_vi() {
     RT64::setRaceHoleFill(race);
     // Into a race, the game cross-fades from the last 4:3 frame (the start card) to the race, so switching the aspect
     // ratio as the race appears stretched the card for a moment. Fade the output through black instead: fade out
-    // (still pillarboxed), hold black until the race mode has begun and the cross-fade is over, switch, fade in.
+    // (still pillarboxed) as the card ends, hold black through loading until the race mode has begun and the
+    // cross-fade is over, switch, fade in.
     constexpr uint32_t race_mode = 0x800046C4;
     // The cross-fade lasts about 20 game frames: hold for 24 frames from the first race frame (and at least ~0.5 s).
     constexpr uint32_t fade_out_vis = 8, hold_min_vis = 24, hold_max_vis = 300, fade_in_vis = 15, crossfade_frames = 24;
-    static int transition = 0;  // 0 none, 1 fading out, 2 black, 3 fading in
+    static int transition = 0;  // 0 none, 1 fading out, 2 black, 4 black after the switch, 3 fading in
     static uint32_t transition_vi = 0;
     static uint32_t transition_swap = 0;
-    if (!race && transition != 0) {
+    static bool race_seen = false;  // the race has started drawing since the fade began
+    // Start fading out as the start card ends (the loading modes after it), before the game starts its cross-fade.
+    constexpr uint32_t card_end_mode = 0x800042E8;
+    const bool loading = (mode >= card_end_mode) && (mode <= race_mode);
+    if (!race && !loading && transition != 0) {
         transition = 0;
         RT64::setOutputBrightness(1.0f);
     }
-    if (race && pillarboxed && transition == 0) {
+    if ((race || loading) && pillarboxed && transition == 0) {
         transition = 1;
         transition_vi = vi_count;
-        transition_swap = race_view_frames;
+        race_seen = false;
+    }
+    // Game frames with a race view: gt_race_view runs for several cameras per frame, so count the VIs on which it ran.
+    static uint32_t last_race_view_count = 0;
+    static uint32_t race_frames = 0;
+    if (race_view_frames != last_race_view_count) {
+        last_race_view_count = race_view_frames;
+        race_frames++;
+    }
+    if (transition != 0 && race && !race_seen) {
+        race_seen = true;
+        transition_swap = race_frames;
     }
     const uint32_t t = vi_count - transition_vi;
     if (transition == 1) {
@@ -198,7 +214,18 @@ void gt::widescreen_on_vi() {
     }
     else if (transition == 2) {
         RT64::setOutputBrightness(0.0f);
-        if ((mode == race_mode && t >= hold_min_vis && race_view_frames - transition_swap >= crossfade_frames) || t >= hold_max_vis) {
+        if ((race_seen && mode == race_mode && t >= hold_min_vis && race_frames - transition_swap >= crossfade_frames) ||
+            (race_seen && t >= hold_max_vis)) {
+            // Switch the aspect ratio while black, and wait for a few frames drawn in widescreen before fading in (the
+            // frames already drawn are 4:3).
+            transition = 4;
+            transition_vi = vi_count;
+            transition_swap = race_frames;
+        }
+    }
+    else if (transition == 4) {
+        RT64::setOutputBrightness(0.0f);
+        if (race_frames - transition_swap >= 3 || t >= 60) {
             transition = 3;
             transition_vi = vi_count;
         }
@@ -210,7 +237,7 @@ void gt::widescreen_on_vi() {
             RT64::setOutputBrightness(1.0f);
         }
     }
-    const bool pillar = !race || transition == 1 || transition == 2;
+    const bool pillar = !race || transition == 1 || transition == 2;  // (loading modes aren't races, so they pillarbox)
     const bool remap = !race && (vi_count - split_view_vi > 2);
     menu_3d_scale = remap && (mode != intro_mode);
 
