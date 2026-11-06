@@ -186,7 +186,10 @@ stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_
 fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for tuning the fill), `GT_NO_SHADOW_FIX`,
 `GT_KEEP_WINDOW_BOX` (keep the credits' translucent box), `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A is
 held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_RUMBLE_LOG`
-(pak probes, motor on and off), `GT_PAK_LOG` (Controller Pak calls), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
+(pak probes, motor on and off), `GT_PAK_LOG` (Controller Pak calls and save requests), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
+
+On Windows the game's output goes to `GT64Recompiled.log` beside the exe, and a crash adds the exception and its
+location in the exe there.
 
 </details>
 

@@ -1,8 +1,8 @@
 diff --git a/librecomp/src/pak.cpp b/librecomp/src/pak.cpp
-index 0be1513..0a95e56 100644
+index 0be1513..e14d87d 100644
 --- a/librecomp/src/pak.cpp
 +++ b/librecomp/src/pak.cpp
-@@ -1,51 +1,464 @@
+@@ -1,51 +1,460 @@
 +#include <array>
 +#include <cstdio>
 +#include <cstdlib>
@@ -191,11 +191,7 @@ index 0be1513..0a95e56 100644
 +
 +    // GT_PAK_LOG: log each call.
 +    void log_call(const char* name, int result) {
-+#ifdef _WIN32
-+        static const bool log = true;  // into GT64Recompiled.log
-+#else
 +        static const bool log = std::getenv("GT_PAK_LOG") != nullptr;
-+#endif
 +        if (log) {
 +            std::fprintf(stderr, "[pak] %s -> %d\n", name, result);
 +        }

@@ -801,11 +801,7 @@ extern "C" void gt_track_segment(uint8_t* rdram, recomp_context* ctx) {
 
 // The save thread's requests (func_80005B80: 10-18 are the Controller Pak calls, 18 motor init).
 extern "C" void gt_save_request(uint8_t* rdram, uint32_t request) {
-#ifdef _WIN32
-    static const bool log = true;  // into GT64Recompiled.log
-#else
     static const bool log = std::getenv("GT_PAK_LOG") != nullptr;
-#endif
     if (log) {
         std::fprintf(stderr, "[save] request %d (mode %08X)\n", int(int16_t(rd16(rdram, request))), rd32(rdram, 0x800E8810u));
     }
