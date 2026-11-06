@@ -383,10 +383,10 @@ index 641f3ec..cc1eeb7 100644
          ShaderRecord videoInterfaceNearest;
 diff --git a/src/shaders/CrackFillPS.hlsl b/src/shaders/CrackFillPS.hlsl
 new file mode 100644
-index 0000000..0412657
+index 0000000..bbff786
 --- /dev/null
 +++ b/src/shaders/CrackFillPS.hlsl
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,151 @@
 +//
 +// RT64
 +//
@@ -415,8 +415,9 @@ index 0000000..0412657
 +};
 +
 +// 1 - depth at which the wide limit starts to exceed `radius` is 1 / WIDE_DEPTH_SCALE: in GT64 the road right below the
-+// camera is around 0.17, the stands and trusses beside the track 0.03, trees and hills under 0.01.
-+#define WIDE_DEPTH_SCALE 18.0f
++// chase camera is around 0.17 (the replay cameras zoom in from further away, so the same gap on screen reads lower), the
++// stands and trusses beside the track 0.03, trees and hills under 0.01.
++#define WIDE_DEPTH_SCALE 32.0f
 +
 +[[vk::push_constant]] ConstantBuffer<CrackFillCB> gConstants : register(b0);
 +
