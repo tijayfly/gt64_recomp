@@ -57,7 +57,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Analog throttle and brake.** With General > Analog Triggers on (the default), the throttle and brake follow how
   far the triggers (or any analog input bound to A and B) are pressed, on top of the game's own pedal ramp.
 - **Draw distance.** Graphics > Draw Distance: *Maximum* (default) draws the whole track (*Extended* in split screen),
-  *Extended* twice as many track sections ahead and more behind; both keep the most detailed track models at any distance and move the far plane
+  *Extended* twice as many track sections ahead and more behind; both draw all the trackside scenery (it was culled
+  by a view cone meant for 4:3, so it went missing at the edges of the widescreen view) and keep the most detailed track models at any distance and move the far plane
   out, with fog and weather left where they were. *Original* matches the N64.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.

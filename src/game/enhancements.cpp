@@ -635,6 +635,12 @@ namespace {
         std::memcpy(&d, &bits, sizeof(d));
         return d;
     }
+    void wr64f(uint8_t* rdram, uint32_t a, double d) {
+        uint64_t bits;
+        std::memcpy(&bits, &d, sizeof(d));
+        wr32(rdram, a, uint32_t(bits >> 32));
+        wr32(rdram, a + 4, uint32_t(bits));
+    }
     void wr32f(uint8_t* rdram, uint32_t a, float f) {
         uint32_t bits;
         std::memcpy(&bits, &f, sizeof(f));
@@ -658,7 +664,14 @@ namespace {
 
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     views_this_frame++;
-    if (!extended_draw_distance()) {
+    // Trackside scenery outside the ring (hedges, trees, stands: func_80009698) is culled by its angle and squared
+    // distance from the camera: always within 1000 units, out to 7000 inside a view cone meant for 4:3, 200 behind. With
+    // the extended draw distance it's all drawn.
+    const bool extended = extended_draw_distance();
+    wr64f(rdram, 0x800AA608u, extended ? 1e12 : 1e6);
+    wr64f(rdram, 0x800AA610u, extended ? 1e12 : 4.9e7);
+    wr64f(rdram, 0x800AA618u, extended ? 1e12 : 4e4);
+    if (!extended) {
         return count;
     }
     int32_t behind, ahead;
