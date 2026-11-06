@@ -43,7 +43,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   the original too)
 - [x] Custom app icon
 - [x] Rumble: the game finds a Rumble Pak in the controller; strength in General > Rumble Strength (0 turns it off)
-- [ ] Saves (Controller Pak; the runtime reports no pak, so the game offers to continue without saving)
+- [ ] Saves (Controller Pak; not supported yet, and the controller reports a Rumble Pak, so the game offers to
+  continue without saving)
 
 ## Enhancements
 
