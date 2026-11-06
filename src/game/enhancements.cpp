@@ -169,7 +169,47 @@ void gt::widescreen_on_vi() {
     constexpr uint32_t pause_mode = 0x80004940;
     static bool racing = false;
     const bool in_race_mode = (mode == 0x800046C4) || (mode == pause_mode);
-    const bool race = (mode >= race_modes_start) && (vi_count - full_view_vi <= 120) && (!racing || in_race_mode);
+    // After a race ends, stay out of race until the menus (a race view seen within the last two seconds would
+    // otherwise count as a race again on the results screen).
+    static bool race_ended = false;
+    if (mode < race_modes_start) {
+        race_ended = false;
+    }
+    bool race = (mode >= race_modes_start) && (vi_count - full_view_vi <= 120) && (!racing || in_race_mode) && !race_ended;
+    // Leaving a race: the game is part-way through its fade to black when it changes mode, so fade the output the rest
+    // of the way to black, switch to 4:3 there, and bring the output back while the game's screen is still black.
+    constexpr uint32_t end_fade_vis = 8, end_hold_vis = 24, end_fade_in_vis = 10;
+    static int end_transition = 0;  // 0 none, 1 fading out (still widescreen), 2 black and 4:3, 3 fading back in
+    static uint32_t end_vi = 0;
+    if (racing && !race && end_transition == 0) {
+        race_ended = true;
+        end_transition = 1;
+        end_vi = vi_count;
+    }
+    const uint32_t te = vi_count - end_vi;
+    if (end_transition == 1) {
+        RT64::setOutputBrightness(1.0f - float(te) / end_fade_vis);
+        if (te >= end_fade_vis) {
+            end_transition = 2;
+        }
+        else {
+            race = true;  // keep widescreen until black
+        }
+    }
+    if (end_transition == 2) {
+        RT64::setOutputBrightness(0.0f);
+        if (te >= end_fade_vis + end_hold_vis) {
+            end_transition = 3;
+        }
+    }
+    else if (end_transition == 3) {
+        const uint32_t tf = te - end_fade_vis - end_hold_vis;
+        RT64::setOutputBrightness(float(tf) / end_fade_in_vis);
+        if (tf >= end_fade_in_vis) {
+            end_transition = 0;
+            RT64::setOutputBrightness(1.0f);
+        }
+    }
     {
         static const bool log = std::getenv("GT_MODELOG") != nullptr;
         static int last = -1;
@@ -190,11 +230,11 @@ void gt::widescreen_on_vi() {
     // Start fading out as the start card ends (the loading modes after it), before the game starts its cross-fade.
     constexpr uint32_t card_end_mode = 0x800042E8;
     const bool loading = (mode >= card_end_mode) && (mode <= race_mode);
-    if (!race && !loading && transition != 0) {
+    if (((!race && !loading) || race_ended) && transition != 0) {
         transition = 0;
         RT64::setOutputBrightness(1.0f);
     }
-    if ((race || loading) && pillarboxed && transition == 0) {
+    if ((race || loading) && pillarboxed && transition == 0 && !race_ended) {
         transition = 1;
         transition_vi = vi_count;
         race_seen = false;
