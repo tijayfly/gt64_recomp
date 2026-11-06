@@ -106,7 +106,9 @@ func = "func_800081F0"
 before_vram = 0x80008328
 text = "{ void gt_pad_entry(uint8_t*, int, uint32_t, int); gt_pad_entry(rdram, (int)ctx->r17, (uint32_t)ctx->r18, 1); }"
 
-# Rumble: answer the pak probes (osPfsInitPak) as a Rumble Pak would, so the game finds one and rumbles.
+# Paks: a Controller Pak and a Rumble Pak in each controller, switched automatically. The boot probe (osPfsInitPak in
+# func_80043CB4) answers as a Rumble Pak, so the game rumbles in races; the probe before each save or load
+# (func_8004447C, called by the save routines) finds the Controller Pak, and keeps the rumble flag it would clear.
 [[patches.hook]]
 func = "func_80043CB4"
 before_vram = 0x80043E18
@@ -114,8 +116,8 @@ text = "{ int32_t gt_pak_probe(int32_t, int32_t); ctx->r2 = (int64_t)gt_pak_prob
 
 [[patches.hook]]
 func = "func_8004447C"
-before_vram = 0x80044508
-text = "{ int32_t gt_pak_probe(int32_t, int32_t); ctx->r2 = (int64_t)gt_pak_probe((int32_t)ctx->r19, (int32_t)ctx->r2); }"
+before_vram = 0x800445FC
+text = "{ ctx->r14 = (ctx->r14 & 0xFF0F) | (ctx->r13 & 0x00F0); }"
 
 [[patches.hook]]
 func = "func_80043990"

@@ -42,9 +42,10 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   ones close to the camera and in replays. A few larger gaps in the track models are left as they are (they're in
   the original too)
 - [x] Custom app icon
-- [x] Rumble: the game finds a Rumble Pak in the controller; strength in General > Rumble Strength (0 turns it off)
-- [ ] Saves (Controller Pak; not supported yet, and the controller reports a Rumble Pak, so the game offers to
-  continue without saving)
+- [x] Rumble: strength in General > Rumble Strength (0 turns it off)
+- [x] Saves: each controller has a Controller Pak and a Rumble Pak at once, so there's nothing to swap: saving and
+  loading use the Controller Pak, races rumble. The pak is a standard 32 KB `.mpk` image (`controller_pak_1.mpk`) in
+  the saves folder, so emulator pak files can be dropped in
 
 ## Enhancements
 
@@ -148,13 +149,16 @@ Hooks in `gt64.us.toml` call native code in `src/game/enhancements.cpp`:
 - the race view's track list (`func_8000A350`, `func_8000A280`, `func_8000A570`): more track sections, with list nodes
   and matrices past the game's buffers in the Expansion Pak's free 4 MB and the streamed track geometry served from a
   copy of its ROM block there;
-- the pak probes (`osPfsInitPak` in `func_80043CB4` and `func_8004447C`): the runtime always answers "no pak", so
-  they answer as a Rumble Pak does and the game rumbles;
+- the pak probes (`osPfsInitPak`): the one at boot (`func_80043CB4`) answers as a Rumble Pak, so the game rumbles;
+  the one before each save or load (`func_8004447C`) finds the Controller Pak and keeps the rumble flag it would
+  clear;
 - on every VI, the game mode (`0x800E8810`) picks widescreen or pillarbox (re-applied if a settings change brings
   back the saved aspect ratio) and the 2D box to stretch.
 
 Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake:
 
+- `N64ModernRuntime-controller-pak.patch`: the Controller Pak calls (`osPfs*`), which only ever answered "no pak",
+  backed by a 32 KB pak image per controller.
 - `rt64-s2dex1-objects.patch`: S2DEX 1.x object commands (rectangles, sprites, rotated sprites, LOADTXTR), 4/8-bit
   `bgCopy` and `bg1Cyc` backgrounds, the sky wrapped out to the window's edges, the fade grid covering the frame,
   point-sampled sprites, the sky drawn filtered;
@@ -182,7 +186,7 @@ stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_
 fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for tuning the fill), `GT_NO_SHADOW_FIX`,
 `GT_KEEP_WINDOW_BOX` (keep the credits' translucent box), `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A is
 held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_RUMBLE_LOG`
-(pak probes, motor on and off), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
+(pak probes, motor on and off), `GT_PAK_LOG` (Controller Pak calls), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
 
 </details>
 
