@@ -1,0 +1,490 @@
+diff --git a/librecomp/src/pak.cpp b/librecomp/src/pak.cpp
+index 0be1513..e14d87d 100644
+--- a/librecomp/src/pak.cpp
++++ b/librecomp/src/pak.cpp
+@@ -1,51 +1,460 @@
++#include <array>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <mutex>
++
+ #include "ultramodern/ultra64.h"
+ #include "ultramodern/ultramodern.hpp"
+ 
+ #include "recomp.h"
+ #include "helpers.hpp"
++#include "librecomp/files.hpp"
++#include "librecomp/game.hpp"
+ 
+-extern "C" void osPfsInitPak_recomp(uint8_t * rdram, recomp_context* ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
+-}
++// Controller Pak: a 32 KB pak image (the standard .mpk layout emulators use) kept in the saves folder, one per
++// controller, behind the libultra osPfs* calls.
++//
++// Layout (128 pages of 256 bytes): page 0 the ID area (32-byte ID blocks at 0x20, 0x60, 0x80, 0xC0), page 1 the inode
++// table (128 big-endian u16 entries: the next page of a file, 1 = last page, 3 = free; entry 0's low byte is the
++// checksum of entries 5..127), page 2 its backup, pages 3-4 the note table (16 notes of 32 bytes), pages 5-127 data.
++
++namespace {
++    constexpr int PFS_ERR_NOPACK = 1;
++    constexpr int PFS_ERR_INVALID = 5;
++    constexpr int PFS_DATA_FULL = 7;
++    constexpr int PFS_DIR_FULL = 8;
++    constexpr int PFS_ERR_EXIST = 9;
++
++    constexpr size_t pak_size = 0x8000;
++    constexpr size_t page_size = 0x100;
++    constexpr int pages = 128;
++    constexpr int first_data_page = 5;
++    constexpr int max_notes = 16;
++    constexpr uint16_t inode_last = 1;
++    constexpr uint16_t inode_free = 3;
++
++    struct Pak {
++        bool loaded = false;
++        std::array<uint8_t, pak_size> data{};
++    };
++    std::array<Pak, 4> paks;
++    std::mutex pak_mutex;
++
++    std::filesystem::path pak_path(int channel) {
++        std::filesystem::path folder = ultramodern::get_save_file_path().parent_path();
++        return folder / ("controller_pak_" + std::to_string(channel + 1) + ".mpk");
++    }
++
++    uint16_t be16(const uint8_t* p) { return uint16_t((p[0] << 8) | p[1]); }
++    void put16(uint8_t* p, uint16_t v) { p[0] = uint8_t(v >> 8); p[1] = uint8_t(v); }
++    uint32_t be32(const uint8_t* p) { return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3]; }
++    void put32(uint8_t* p, uint32_t v) { put16(p, uint16_t(v >> 16)); put16(p + 2, uint16_t(v)); }
++
++    uint16_t inode(const Pak& pak, int page) { return be16(&pak.data[page_size + page * 2]); }
++
++    void set_inode(Pak& pak, int page, uint16_t value) { put16(&pak.data[page_size + page * 2], value); }
++
++    // Checksum the inode table and copy it to its backup page.
++    void finish_inodes(Pak& pak) {
++        uint8_t sum = 0;
++        for (int i = first_data_page * 2; i < pages * 2; i++) {
++            sum += pak.data[page_size + i];
++        }
++        pak.data[page_size + 1] = sum;
++        std::memcpy(&pak.data[2 * page_size], &pak.data[page_size], page_size);
++    }
++
++    void format(Pak& pak) {
++        pak.data.fill(0);
++        // ID block: serial, device id 1, one bank, then the checksum of its first 14 words and 0xFFF2 minus it.
++        uint8_t id[32] = {};
++        put32(id + 4, 0x47543634); // "GT64" as the random/serial field
++        put16(id + 24, 0x0001);
++        id[26] = 1;  // banks
++        uint16_t sum = 0;
++        for (int i = 0; i < 28; i += 2) {
++            sum += be16(id + i);
++        }
++        put16(id + 28, sum);
++        put16(id + 30, uint16_t(0xFFF2 - sum));
++        for (size_t offset : { 0x20, 0x60, 0x80, 0xC0 }) {
++            std::memcpy(&pak.data[offset], id, sizeof(id));
++        }
++        for (int page = first_data_page; page < pages; page++) {
++            set_inode(pak, page, inode_free);
++        }
++        finish_inodes(pak);
++    }
++
++    void save(int channel) {
++        const std::filesystem::path path = pak_path(channel);
++        std::error_code ec;
++        std::filesystem::create_directories(path.parent_path(), ec);
++        {
++            std::ofstream out = recomp::open_output_file_with_backup(path, std::ios_base::binary);
++            if (!out.good()) {
++                return;
++            }
++            out.write(reinterpret_cast<const char*>(paks[channel].data.data()), pak_size);
++        }
++        recomp::finalize_output_file_with_backup(path);
++    }
+ 
+-extern "C" void osPfsFreeBlocks_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++    Pak* get_pak(int channel) {
++        if (channel < 0 || channel >= int(paks.size())) {
++            return nullptr;
++        }
++        Pak& pak = paks[channel];
++        if (!pak.loaded) {
++            std::ifstream in(pak_path(channel), std::ios_base::binary);
++            if (in.good() && in.read(reinterpret_cast<char*>(pak.data.data()), pak_size) && in.gcount() == std::streamsize(pak_size)) {
++                pak.loaded = true;
++            }
++            else {
++                format(pak);
++                pak.loaded = true;
++                save(channel);
++            }
++        }
++        return &pak;
++    }
++
++    uint8_t* note(Pak& pak, int file_no) { return &pak.data[3 * page_size + file_no * 32]; }
++    bool note_used(Pak& pak, int file_no) {
++        const uint8_t* n = note(pak, file_no);
++        return be32(n) != 0 || be16(n + 4) != 0;
++    }
++
++    int free_pages(const Pak& pak) {
++        int count = 0;
++        for (int page = first_data_page; page < pages; page++) {
++            count += (inode(pak, page) == inode_free);
++        }
++        return count;
++    }
++
++    int file_pages(const Pak& pak, int start) {
++        int count = 0;
++        for (int page = start; page >= first_data_page && page < pages && count < pages; page = inode(pak, page)) {
++            count++;
++            if (inode(pak, page) == inode_last) {
++                break;
++            }
++        }
++        return count;
++    }
++
++    // RDRAM helpers: the game's byte buffers and 16/32-bit values through the recompiler's address swizzling.
++    uint8_t rd8(uint8_t* rdram, gpr addr) { return MEM_BU(0, addr); }
++    void wr8(uint8_t* rdram, gpr addr, uint8_t v) { MEM_B(0, addr) = int8_t(v); }
++
++    int channel_of(uint8_t* rdram, gpr pfs_addr) {
++        return TO_PTR(OSPfs, pfs_addr)->channel;
++    }
++
++    bool names_match(uint8_t* rdram, const uint8_t* n, gpr game_name, gpr ext_name) {
++        for (int i = 0; i < 16; i++) {
++            if (n[16 + i] != rd8(rdram, game_name + i)) {
++                return false;
++            }
++        }
++        for (int i = 0; i < 4; i++) {
++            if (n[12 + i] != rd8(rdram, ext_name + i)) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    int find(uint8_t* rdram, Pak& pak, uint16_t company, uint32_t game, gpr game_name, gpr ext_name) {
++        for (int i = 0; i < max_notes; i++) {
++            const uint8_t* n = note(pak, i);
++            if (note_used(pak, i) && be32(n) == game && be16(n + 4) == company && names_match(rdram, n, game_name, ext_name)) {
++                return i;
++            }
++        }
++        return -1;
++    }
++
++    // GT_PAK_LOG: log each call.
++    void log_call(const char* name, int result) {
++        static const bool log = std::getenv("GT_PAK_LOG") != nullptr;
++        if (log) {
++            std::fprintf(stderr, "[pak] %s -> %d\n", name, result);
++        }
++    }
++
++    gpr stack_arg(uint8_t* rdram, recomp_context* ctx, int index) {
++        return MEM_W(0x10 + (index - 4) * 4, ctx->r29);
++    }
+ }
+ 
+-extern "C" void osPfsAllocateFile_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++// osPfsInitPak(OSMesgQueue* mq, OSPfs* pfs, int channel)
++extern "C" void osPfsInitPak_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsInitPak", int32_t(c->r2)); } } log_on_exit{ ctx };
++    std::lock_guard lock{ pak_mutex };
++    const gpr pfs_addr = ctx->r5;
++    const int channel = int(ctx->r6);
++    Pak* pak = get_pak(channel);
++    if (pak == nullptr) {
++        ctx->r2 = PFS_ERR_NOPACK;
++        return;
++    }
++    OSPfs* pfs = TO_PTR(OSPfs, pfs_addr);
++    pfs->status = 1; // PFS_INITIALIZED
++    pfs->queue = ctx->r4;
++    pfs->channel = channel;
++    pfs->version = 0;
++    pfs->dir_size = max_notes;
++    pfs->inode_table = 1 * 8;
++    pfs->minode_table = 2 * 8;
++    pfs->dir_table = 3 * 8;
++    pfs->inode_start_page = first_data_page;
++    pfs->banks = 1;
++    pfs->activebank = 0;
++    ctx->r2 = 0;
+ }
+ 
+-extern "C" void osPfsDeleteFile_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++// osPfsRepairId(OSPfs* pfs)
++extern "C" void osPfsRepairId_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsRepairId", int32_t(c->r2)); } } log_on_exit{ ctx };
++    ctx->r2 = 0;
+ }
+ 
+-extern "C" void osPfsFileState_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++// osPfsChecker(OSPfs* pfs)
++extern "C" void osPfsChecker_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsChecker", int32_t(c->r2)); } } log_on_exit{ ctx };
++    ctx->r2 = 0;
+ }
+ 
+-extern "C" void osPfsFindFile_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++// osPfsFreeBlocks(OSPfs* pfs, s32* bytes_not_used)
++extern "C" void osPfsFreeBlocks_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsFreeBlocks", int32_t(c->r2)); } } log_on_exit{ ctx };
++    std::lock_guard lock{ pak_mutex };
++    Pak* pak = get_pak(channel_of(rdram, ctx->r4));
++    if (pak == nullptr) {
++        ctx->r2 = PFS_ERR_NOPACK;
++        return;
++    }
++    MEM_W(0, ctx->r5) = free_pages(*pak) * int32_t(page_size);
++    ctx->r2 = 0;
+ }
+ 
+-extern "C" void osPfsReadWriteFile_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++// osPfsNumFiles(OSPfs* pfs, s32* max_files, s32* files_used)
++extern "C" void osPfsNumFiles_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsNumFiles", int32_t(c->r2)); } } log_on_exit{ ctx };
++    std::lock_guard lock{ pak_mutex };
++    Pak* pak = get_pak(channel_of(rdram, ctx->r4));
++    if (pak == nullptr) {
++        ctx->r2 = PFS_ERR_NOPACK;
++        return;
++    }
++    int used = 0;
++    for (int i = 0; i < max_notes; i++) {
++        used += note_used(*pak, i);
++    }
++    MEM_W(0, ctx->r5) = max_notes;
++    MEM_W(0, ctx->r6) = used;
++    ctx->r2 = 0;
+ }
+ 
+-extern "C" void osPfsChecker_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++// osPfsFindFile(OSPfs* pfs, u16 company_code, u32 game_code, u8* game_name, u8* ext_name, s32* file_no)
++extern "C" void osPfsFindFile_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsFindFile", int32_t(c->r2)); } } log_on_exit{ ctx };
++    std::lock_guard lock{ pak_mutex };
++    Pak* pak = get_pak(channel_of(rdram, ctx->r4));
++    if (pak == nullptr) {
++        ctx->r2 = PFS_ERR_NOPACK;
++        return;
++    }
++    const int file_no = find(rdram, *pak, uint16_t(ctx->r5), uint32_t(ctx->r6), ctx->r7, stack_arg(rdram, ctx, 4));
++    if (file_no < 0) {
++        ctx->r2 = PFS_ERR_INVALID;
++        return;
++    }
++    MEM_W(0, stack_arg(rdram, ctx, 5)) = file_no;
++    ctx->r2 = 0;
+ }
+ 
+-extern "C" void osPfsNumFiles_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    s32* max_files = _arg<1, s32*>(rdram, ctx);
+-    s32* files_used = _arg<2, s32*>(rdram, ctx);
++// osPfsAllocateFile(OSPfs* pfs, u16 company_code, u32 game_code, u8* game_name, u8* ext_name, int length, s32* file_no)
++extern "C" void osPfsAllocateFile_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsAllocateFile", int32_t(c->r2)); } } log_on_exit{ ctx };
++    std::lock_guard lock{ pak_mutex };
++    const int channel = channel_of(rdram, ctx->r4);
++    Pak* pak = get_pak(channel);
++    if (pak == nullptr) {
++        ctx->r2 = PFS_ERR_NOPACK;
++        return;
++    }
++    const uint16_t company = uint16_t(ctx->r5);
++    const uint32_t game = uint32_t(ctx->r6);
++    const gpr game_name = ctx->r7, ext_name = stack_arg(rdram, ctx, 4);
++    const int length = int32_t(stack_arg(rdram, ctx, 5));
++    const gpr file_no_out = stack_arg(rdram, ctx, 6);
++    if (company == 0 || game == 0 || length <= 0) {
++        ctx->r2 = PFS_ERR_INVALID;
++        return;
++    }
++    if (find(rdram, *pak, company, game, game_name, ext_name) >= 0) {
++        ctx->r2 = PFS_ERR_EXIST;
++        return;
++    }
++    int file_no = -1;
++    for (int i = 0; i < max_notes; i++) {
++        if (!note_used(*pak, i)) {
++            file_no = i;
++            break;
++        }
++    }
++    if (file_no < 0) {
++        ctx->r2 = PFS_DIR_FULL;
++        return;
++    }
++    const int needed = int((length + page_size - 1) / page_size);
++    if (needed > free_pages(*pak)) {
++        ctx->r2 = PFS_DATA_FULL;
++        return;
++    }
++    // Chain free pages, in order.
++    int first = -1, previous = -1, taken = 0;
++    for (int page = first_data_page; page < pages && taken < needed; page++) {
++        if (inode(*pak, page) != inode_free) {
++            continue;
++        }
++        if (previous >= 0) {
++            set_inode(*pak, previous, uint16_t(page));
++        }
++        else {
++            first = page;
++        }
++        set_inode(*pak, page, inode_last);
++        std::memset(&pak->data[page * page_size], 0, page_size);
++        previous = page;
++        taken++;
++    }
++    finish_inodes(*pak);
++    uint8_t* n = note(*pak, file_no);
++    std::memset(n, 0, 32);
++    put32(n, game);
++    put16(n + 4, company);
++    n[6] = 0;  // bank
++    n[7] = uint8_t(first);
++    n[8] = 0x02;  // status: occupied
++    for (int i = 0; i < 4; i++) {
++        n[12 + i] = rd8(rdram, ext_name + i);
++    }
++    for (int i = 0; i < 16; i++) {
++        n[16 + i] = rd8(rdram, game_name + i);
++    }
++    save(channel);
++    MEM_W(0, file_no_out) = file_no;
++    ctx->r2 = 0;
++}
+ 
+-    *max_files = 0;
+-    *files_used = 0;
++// osPfsDeleteFile(OSPfs* pfs, u16 company_code, u32 game_code, u8* game_name, u8* ext_name)
++extern "C" void osPfsDeleteFile_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsDeleteFile", int32_t(c->r2)); } } log_on_exit{ ctx };
++    std::lock_guard lock{ pak_mutex };
++    const int channel = channel_of(rdram, ctx->r4);
++    Pak* pak = get_pak(channel);
++    if (pak == nullptr) {
++        ctx->r2 = PFS_ERR_NOPACK;
++        return;
++    }
++    const int file_no = find(rdram, *pak, uint16_t(ctx->r5), uint32_t(ctx->r6), ctx->r7, stack_arg(rdram, ctx, 4));
++    if (file_no < 0) {
++        ctx->r2 = PFS_ERR_INVALID;
++        return;
++    }
++    uint8_t* n = note(*pak, file_no);
++    for (int page = n[7], guard = 0; page >= first_data_page && page < pages && guard < pages; guard++) {
++        const uint16_t next = inode(*pak, page);
++        set_inode(*pak, page, inode_free);
++        if (next == inode_last) {
++            break;
++        }
++        page = next;
++    }
++    finish_inodes(*pak);
++    std::memset(n, 0, 32);
++    save(channel);
++    ctx->r2 = 0;
++}
+ 
+-    _return<s32>(ctx, 1); // PFS_ERR_NOPACK
++// osPfsReadWriteFile(OSPfs* pfs, s32 file_no, u8 flag, int offset, int size_in_bytes, u8* data_buffer)
++extern "C" void osPfsReadWriteFile_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsReadWriteFile", int32_t(c->r2)); } } log_on_exit{ ctx };
++    std::lock_guard lock{ pak_mutex };
++    const int channel = channel_of(rdram, ctx->r4);
++    Pak* pak = get_pak(channel);
++    if (pak == nullptr) {
++        ctx->r2 = PFS_ERR_NOPACK;
++        return;
++    }
++    const int file_no = int32_t(ctx->r5);
++    const bool write = (uint8_t(ctx->r6) == 1);
++    const int offset = int32_t(ctx->r7);
++    const int size = int32_t(stack_arg(rdram, ctx, 4));
++    const gpr buffer = stack_arg(rdram, ctx, 5);
++    if (file_no < 0 || file_no >= max_notes || !note_used(*pak, file_no) || offset < 0 || size < 0) {
++        ctx->r2 = PFS_ERR_INVALID;
++        return;
++    }
++    const int start = note(*pak, file_no)[7];
++    if (offset + size > file_pages(*pak, start) * int(page_size)) {
++        ctx->r2 = PFS_ERR_INVALID;
++        return;
++    }
++    // Walk the chain to each byte's page.
++    int page = start, page_index = 0;
++    for (int i = 0; i < size; i++) {
++        const int at = offset + i;
++        while (page_index < at / int(page_size)) {
++            page = inode(*pak, page);
++            page_index++;
++        }
++        uint8_t& byte = pak->data[page * page_size + (at % page_size)];
++        if (write) {
++            byte = rd8(rdram, buffer + i);
++        }
++        else {
++            wr8(rdram, buffer + i, byte);
++        }
++    }
++    if (write) {
++        save(channel);
++    }
++    ctx->r2 = 0;
+ }
+ 
+-extern "C" void osPfsRepairId_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    _return<s32>(ctx, 1); // PFS_ERR_NOPACK
++// osPfsFileState(OSPfs* pfs, s32 file_no, OSPfsState* state): u32 file_size, u32 game_code, u16 company_code,
++// char ext_name[4], char game_name[16].
++extern "C" void osPfsFileState_recomp(uint8_t* rdram, recomp_context* ctx) {
++    struct LogOnExit { recomp_context* c; ~LogOnExit() { log_call("osPfsFileState", int32_t(c->r2)); } } log_on_exit{ ctx };
++    std::lock_guard lock{ pak_mutex };
++    Pak* pak = get_pak(channel_of(rdram, ctx->r4));
++    if (pak == nullptr) {
++        ctx->r2 = PFS_ERR_NOPACK;
++        return;
++    }
++    const int file_no = int32_t(ctx->r5);
++    const gpr state = ctx->r6;
++    if (file_no < 0 || file_no >= max_notes || !note_used(*pak, file_no)) {
++        ctx->r2 = PFS_ERR_INVALID;
++        return;
++    }
++    const uint8_t* n = note(*pak, file_no);
++    MEM_W(0x0, state) = file_pages(*pak, n[7]) * int32_t(page_size);
++    MEM_W(0x4, state) = int32_t(be32(n));
++    MEM_H(0x8, state) = int16_t(be16(n + 4));
++    for (int i = 0; i < 4; i++) {
++        wr8(rdram, state + 0xA + i, n[12 + i]);
++    }
++    for (int i = 0; i < 16; i++) {
++        wr8(rdram, state + 0xE + i, n[16 + i]);
++    }
++    ctx->r2 = 0;
+ }

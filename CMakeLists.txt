@@ -58,6 +58,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime ${CMAKE_SOURCE_D
 # Present the framebuffer the VI switches to, not the one it leaves: tasks finish instantly, so the game can already be
 # drawing its next frame into the old one (flashing black or partly drawn frames in GT64's races and fades).
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime ${CMAKE_SOURCE_DIR}/patches/deps/N64ModernRuntime-screen-update-after-vi-swap.patch)
+# The runtime's Controller Pak calls (osPfs*) always answered "no pak": a real Controller Pak per controller instead, a
+# standard 32 KB .mpk image in the saves folder.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime ${CMAKE_SOURCE_DIR}/patches/deps/N64ModernRuntime-controller-pak.patch)
 # RecompFrontend never reads mouse buttons ("TODO mouse support"), so the default left/right mouse bindings for
 # shoot/aim did nothing. Read them alongside the keyboard state.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/RecompFrontend ${CMAKE_SOURCE_DIR}/patches/deps/RecompFrontend-mouse-buttons.patch)
@@ -199,6 +202,8 @@ if (WIN32)
             $<TARGET_FILE_DIR:GT64Recompiled>)
 
     target_link_libraries(GT64Recompiled PRIVATE SDL2 Winmm.lib)
+    # A link map beside the exe, to turn the crash log's exe offsets into function names.
+    target_link_options(GT64Recompiled PRIVATE /MAP)
 endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
