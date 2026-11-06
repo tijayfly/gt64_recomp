@@ -113,7 +113,7 @@ index 84f4e7c..1029afa 100644
          hlslpp::float3 keyCenter;
          hlslpp::float3 keyScale;
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index 2970e71..2e612f8 100644
+index 2970e71..a57257c 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
 @@ -476,6 +476,31 @@ namespace RT64 {
@@ -148,6 +148,23 @@ index 2970e71..2e612f8 100644
          fbPair.addGameCall(gameCall);
  
          // Assign the indices or increase the count of the active sprite command if it exists.
+@@ -1947,8 +1972,15 @@ namespace RT64 {
+             }
+         }
+         
++        // Also present again when the game's output brightness changes (GT64's fade through black into races happens
++        // while loading, when the game presents no new frames).
++        static float lastBrightness = 1.0f;
++        const float brightness = getOutputBrightness();
++        const bool brightnessChanged = (brightness != lastBrightness);
++        lastBrightness = brightness;
++
+         // We only push a new present event to the timeline when it's necessary.
+-        if (fromEarlyPresent || viDifferent || fbChangesMade || screenChangesMade) {
++        if (fromEarlyPresent || viDifferent || fbChangesMade || screenChangesMade || brightnessChanged) {
+             // Push a new renderer event to the timeline for presenting this VI.
+             present.screenVI = newVI;
+             advancePresent(present, false);
 diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
 index a870166..c9ca7b5 100644
 --- a/src/hle/rt64_vi.cpp

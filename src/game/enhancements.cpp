@@ -176,7 +176,7 @@ void gt::widescreen_on_vi() {
     // cross-fade is over, switch, fade in.
     constexpr uint32_t race_mode = 0x800046C4;
     // The cross-fade lasts about 20 game frames: hold for 24 frames from the first race frame (and at least ~0.5 s).
-    constexpr uint32_t fade_out_vis = 8, hold_min_vis = 24, hold_max_vis = 300, fade_in_vis = 15, crossfade_frames = 24;
+    constexpr uint32_t fade_out_vis = 24, hold_min_vis = 24, hold_max_vis = 300, fade_in_vis = 15, crossfade_frames = 24;
     static int transition = 0;  // 0 none, 1 fading out, 2 black, 4 black after the switch, 3 fading in
     static uint32_t transition_vi = 0;
     static uint32_t transition_swap = 0;
