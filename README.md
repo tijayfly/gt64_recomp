@@ -155,7 +155,7 @@ Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake
 controller 1 from a file. `scripts/torace.sh <dir>` drives a run from boot into a Free Run race. Debug switches:
 `GT_MODELOG` (game modes), `GT_VPLOG` (camera view), `GT_TASKLOG`, `GT_STATS`, `GT_NO_REMAP` (turn off the 2D
 stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_CRACK_FILL_DEBUG` (turn off the crack
-fill / show what it fills in magenta), `GT_NO_SHADOW_FIX`, `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A
+fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for tuning the fill), `GT_NO_SHADOW_FIX`, `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A
 is held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay record/playback of pedal amounts), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
 
 </details>

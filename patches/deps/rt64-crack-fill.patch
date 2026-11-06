@@ -41,7 +41,7 @@ index 69a82ac..f878f58 100644
          uint32_t TMEM;
          uint32_t RGBA32;
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index 06b4577..0e6de94 100644
+index 06b4577..c5b27bb 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -4,6 +4,8 @@
@@ -53,7 +53,7 @@ index 06b4577..0e6de94 100644
  #include "../include/rt64_extended_gbi.h"
  
  #include "common/rt64_elapsed_timer.h"
-@@ -1299,6 +1301,56 @@ namespace RT64 {
+@@ -1299,6 +1301,60 @@ namespace RT64 {
                  submitRasterScene(worker, framebuffer, targetDrawCall.fbStorage, rasterScene, depthState);
              }
          }
@@ -83,15 +83,19 @@ index 06b4577..0e6de94 100644
 +                int32_t holeStart;
 +                int32_t holeSearch;
 +                float clearDepth;
-+                int32_t padding;
-+            } pushConstants = { int32_t(colorTarget->width), int32_t(colorTarget->height), framebuffer.crackFillRadius, 1e-4f, 0, 0, 0.99999f, 0 };
++                int32_t wideRadius;
++            } pushConstants = { int32_t(colorTarget->width), int32_t(colorTarget->height), framebuffer.crackFillRadius, 1e-4f, 0, 0, 0.99999f, framebuffer.crackFillWideRadius };
 +            if (framebuffer.crackFillHoles) {
 +                // From the original window's bottom (line 216 of 240, a little above 224) down.
 +                pushConstants.holeStart = int32_t(colorTarget->height * 216 / 240);
 +                pushConstants.holeSearch = int32_t(colorTarget->height * 48 / 240);
 +            }
 +            static const bool crackFillDebug = (getenv("GT_CRACK_FILL_DEBUG") != nullptr);
-+            if (crackFillDebug) {
++            static const bool depthView = (getenv("GT_DEPTH_VIEW") != nullptr);
++            if (depthView) {
++                pushConstants.epsilon = -2.0f;
++            }
++            else if (crackFillDebug) {
 +                pushConstants.epsilon = -pushConstants.epsilon;
 +            }
 +
@@ -110,7 +114,7 @@ index 06b4577..0e6de94 100644
      }
  
      void FramebufferRenderer::waitForUploaders() {
-@@ -1429,6 +1481,49 @@ namespace RT64 {
+@@ -1429,6 +1485,51 @@ namespace RT64 {
  #   endif
  
          targetDrawCall.fbStorage = p.fbStorage;
@@ -155,16 +159,18 @@ index 06b4577..0e6de94 100644
 +
 +                // Gaps up to about an N64 pixel.
 +                framebuffer.crackFillRadius = std::max(1, int32_t(std::lround(p.resolutionScale.y)));
++                // Up to three N64 pixels near the camera where only the sky or the clear colour shows through.
++                framebuffer.crackFillWideRadius = std::max(3, int32_t(std::lround(3.0f * p.resolutionScale.y)));
 +            }
 +        }
          targetDrawCall.sceneIndices.clear();
  
          const float SimilarityPercentage = 0.1f; // TODO: Make more strict once VI ratios are in.
 diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
-index 3add9c3..d4cf5ac 100644
+index 3add9c3..7a43323 100644
 --- a/src/render/rt64_framebuffer_renderer.h
 +++ b/src/render/rt64_framebuffer_renderer.h
-@@ -118,8 +118,21 @@ namespace RT64 {
+@@ -118,8 +118,22 @@ namespace RT64 {
              std::set<RenderTarget *> transitionRenderTargetSet;
              RenderTargetDrawCall renderTargetDrawCall;
              RenderViewport viewport;
@@ -174,6 +180,7 @@ index 3add9c3..d4cf5ac 100644
 +            bool crackFill = false;
 +            bool crackFillHoles = false;
 +            int32_t crackFillRadius = 1;
++            int32_t crackFillWideRadius = 3;
          };
  
 +        // Copy of the colour target read by the crack fill pass.
@@ -376,10 +383,10 @@ index 641f3ec..cc1eeb7 100644
          ShaderRecord videoInterfaceNearest;
 diff --git a/src/shaders/CrackFillPS.hlsl b/src/shaders/CrackFillPS.hlsl
 new file mode 100644
-index 0000000..2e26a69
+index 0000000..0412657
 --- /dev/null
 +++ b/src/shaders/CrackFillPS.hlsl
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,150 @@
 +//
 +// RT64
 +//
@@ -400,8 +407,16 @@ index 0000000..2e26a69
 +    int holeStart;
 +    int holeSearch;
 +    float clearDepth;
-+    int padding;
++    // Gap limit for pixels nothing was drawn in (cleared depth) next to surfaces close to the camera: the track pieces'
++    // gaps are fixed in the world, so near the camera they're magnified past `radius`. It scales with the sides' 1 - depth
++    // (about 1 / distance, see WIDE_DEPTH_SCALE) up to wideRadius; lattices and foliage further
++    // away keep their small gaps, and real gaps showing something drawn behind them keep `radius` too.
++    int wideRadius;
 +};
++
++// 1 - depth at which the wide limit starts to exceed `radius` is 1 / WIDE_DEPTH_SCALE: in GT64 the road right below the
++// camera is around 0.17, the stands and trusses beside the track 0.03, trees and hills under 0.01.
++#define WIDE_DEPTH_SCALE 18.0f
 +
 +[[vk::push_constant]] ConstantBuffer<CrackFillCB> gConstants : register(b0);
 +
@@ -456,6 +471,10 @@ index 0000000..2e26a69
 +float4 PSMain(in float4 pos : SV_Position, in float2 uv : TEXCOORD0) : SV_TARGET {
 +    const int2 p = int2(pos.xy);
 +    const float depth = depthAt(p);
++    if (gConstants.epsilon < -1.0f) {
++        const float v = saturate(-log2(max(1.0f - depth, 1e-12f)) / 24.0f);
++        return float4(v, v, v, 1.0f);
++    }
 +    if ((gConstants.holeStart > 0) && (p.y >= gConstants.holeStart) && (depth >= gConstants.clearDepth)) {
 +        for (int k = 1; k <= gConstants.holeSearch; k++) {
 +            const int2 q = p - int2(0, k);
@@ -469,13 +488,14 @@ index 0000000..2e26a69
 +    // than the whole depth left to the far plane and cracks seen from there (GT64's zoomed-in replay cameras) stayed
 +    // open: there the margin is a tenth of that remaining depth instead.
 +    const float limit = depth - min(abs(gConstants.epsilon), 0.1f * (1.0f - depth));
++    const int radius = (depth >= gConstants.clearDepth) ? max(gConstants.radius, gConstants.wideRadius) : gConstants.radius;
 +    int bestGap = 0x7FFF;
 +    float4 best = float4(0.0f, 0.0f, 0.0f, 0.0f);
 +    for (int axis = 0; axis < 2; axis++) {
 +        const int2 dir = (axis == 0) ? int2(1, 0) : int2(0, 1);
 +        int na = 0;
 +        int nb = 0;
-+        for (int k = 1; k <= gConstants.radius; k++) {
++        for (int k = 1; k <= radius; k++) {
 +            if ((na == 0) && (depthAt(p - dir * k) < limit)) {
 +                na = k;
 +            }
@@ -493,14 +513,20 @@ index 0000000..2e26a69
 +            const float ea = da + (da - depthAt(p - dir * (na + 1))) * float(na);
 +            const float eb = db + (db - depthAt(p + dir * (nb + 1))) * float(nb);
 +            const int gap = na + nb - 1;
-+            if ((ea < limit) && (eb < limit) && (gap <= gConstants.radius) && (gap < bestGap)) {
++            int allowed = gConstants.radius;
++            if (radius > gConstants.radius) {
++                const float nearness = 1.0f - min(da, db);
++                allowed = clamp(int(float(gConstants.radius) * nearness * WIDE_DEPTH_SCALE), gConstants.radius, radius);
++            }
++
++            if ((ea < limit) && (eb < limit) && (gap <= allowed) && (gap < bestGap)) {
 +                bestGap = gap;
 +                best = lerp(colorAt(p - dir * na), colorAt(p + dir * nb), float(na) / float(na + nb));
 +            }
 +        }
 +    }
 +
-+    if (bestGap > gConstants.radius) {
++    if (bestGap == 0x7FFF) {
 +        discard;
 +    }
 +
