@@ -43,8 +43,6 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   the original too)
 - [x] Custom app icon
 - [ ] Saves (Controller Pak; the runtime reports no pak, so the game offers to continue without saving)
-- [ ] The bottom rows of the race view can be left empty for a frame when the game culls the track piece under the
-  camera (it only culled below its original window); they are filled from the rows above, a stopgap
 
 ## Enhancements
 
