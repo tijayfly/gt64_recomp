@@ -122,12 +122,24 @@ void gt::init_config() {
     recompui::config::create_sound_tab();
     recompui::config::create_mods_tab();
     recompui::config::get_graphics_config().update_option_hidden(recompui::config::graphics::options::rr_option, true);
+    // HUD Placement moves HUDs drawn with RT64's extended GBI origins; GT64 has none (its HUD keeps the 4:3 layout), and
+    // the only users are the sky's edge anchors, which must reach the window's edges: fixed to Full and hidden.
+    recompui::config::get_graphics_config().update_option_hidden(recompui::config::graphics::options::hr_option, true);
     recompui::config::finalize();
     {
         auto &graphics = recompui::config::get_graphics_config();
+        bool changed = false;
         const uint32_t original = static_cast<uint32_t>(ultramodern::renderer::RefreshRate::Original);
         if (std::get<uint32_t>(graphics.get_option_value(recompui::config::graphics::options::rr_option)) != original) {
             graphics.set_option_value(recompui::config::graphics::options::rr_option, original);
+            changed = true;
+        }
+        const uint32_t full = static_cast<uint32_t>(ultramodern::renderer::HUDRatioMode::Full);
+        if (std::get<uint32_t>(graphics.get_option_value(recompui::config::graphics::options::hr_option)) != full) {
+            graphics.set_option_value(recompui::config::graphics::options::hr_option, full);
+            changed = true;
+        }
+        if (changed) {
             graphics.save_config();
         }
     }
