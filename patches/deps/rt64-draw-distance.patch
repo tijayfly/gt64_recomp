@@ -1,21 +1,5 @@
-diff --git a/src/hle/rt64_rdp.cpp b/src/hle/rt64_rdp.cpp
-index feb26fb..97cf771 100644
---- a/src/hle/rt64_rdp.cpp
-+++ b/src/hle/rt64_rdp.cpp
-@@ -498,6 +498,11 @@ namespace RT64 {
-             checkFramebufferOverlap(tmemStart >> 3, tmemBytes >> 3, tmemMask, textureStart, textureEnd, lineWidth, rowCount, RGBA32, true);
-         }
-         else {
-+            if (textureEnd > 0x800000) {
-+                static int n = 0;
-+                if (n++ < 20) fprintf(stderr, "[tmem] load tile from %08X..%08X (address %08X) out of RDRAM\n", textureStart, textureEnd, loadTexture.address);
-+                return;
-+            }
-             // Load into TMEM.
-             uint8_t *TMEM8 = reinterpret_cast<uint8_t *>(TMEM);
-             const uint8_t *RDRAM = state->RDRAM;
 diff --git a/src/hle/rt64_rsp.cpp b/src/hle/rt64_rsp.cpp
-index ee2030b..92d3fe5 100644
+index ee2030b..8dd6793 100644
 --- a/src/hle/rt64_rsp.cpp
 +++ b/src/hle/rt64_rsp.cpp
 @@ -11,6 +11,7 @@
@@ -95,29 +79,16 @@ index ee2030b..92d3fe5 100644
                  fogChanged = false;
              }
  
-@@ -835,12 +887,21 @@ namespace RT64 {
+@@ -835,7 +887,8 @@ namespace RT64 {
      }
      
      void RSP::branchZ(uint32_t branchDl, uint16_t vtxIndex, uint32_t zValue, DisplayList **dl) {
 -        const bool forceBranch = state->ext.enhancementConfig->f3dex.forceBranch || extended.forceBranch;
-+        static const bool gtForce = getenv("GT_FORCE_BRANCH") != nullptr;
-+        static const bool gtLog = getenv("GT_BRANCH_LOG") != nullptr;
-+        const bool forceBranch = state->ext.enhancementConfig->f3dex.forceBranch || extended.forceBranch || gtForce || farExtended;
++        // GT64's track sections pick their LOD and cut off with G_BRANCH_Z: always taken while the far plane is extended.
++        const bool forceBranch = state->ext.enhancementConfig->f3dex.forceBranch || extended.forceBranch || farExtended;
          const int workloadCursor = state->ext.workloadQueue->writeCursor;
          const Workload &workload = state->ext.workloadQueue->workloads[workloadCursor];
          const uint32_t globalIndex = indices[vtxIndex];
-         const float screenZ = workload.drawData.posScreen[globalIndex][2] * DepthRange;
-         const float zValueFloat = zValue / 65536.0f;
-+        if (gtLog) {
-+            static int n = 0;
-+            if ((n++ % 500) == 0) {
-+                fprintf(stderr, "[branchZ] #%d target %08X vtx %u z %.1f limit %.1f -> %s\n", n, branchDl,
-+                    vtxIndex, screenZ, zValueFloat, (screenZ < zValueFloat) ? "branch" : "fall");
-+            }
-+        }
-         if (forceBranch || (screenZ < zValueFloat)) {
-             const uint32_t rdramAddress = fromSegmentedMasked(branchDl);
-             *dl = reinterpret_cast<DisplayList *>(state->fromRDRAM(rdramAddress)) - 1;
 diff --git a/src/hle/rt64_rsp.h b/src/hle/rt64_rsp.h
 index 61bb3b1..ec36e34 100644
 --- a/src/hle/rt64_rsp.h
@@ -134,39 +105,3 @@ index 61bb3b1..ec36e34 100644
          bool lightsChanged;
          bool lookAtChanged;
          interop::RSPLookAt lookAt;
-diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
-index c9ca7b5..4501ed8 100644
---- a/src/hle/rt64_vi.cpp
-+++ b/src/hle/rt64_vi.cpp
-@@ -51,6 +51,18 @@ namespace RT64 {
-         return raceHoleFill.load();
-     }
- 
-+    // Set by the game during races when the draw distance is extended: the race camera's far plane is moved out by this
-+    // much (see RSP::matrixCommon) and its depth branches always taken. 1 = original.
-+    static std::atomic<float> farScale{ 1.0f };
-+
-+    void setFarScale(float scale) {
-+        farScale.store(std::max(scale, 1.0f));
-+    }
-+
-+    float getFarScale() {
-+        return farScale.load();
-+    }
-+
-     // GT64 lays out its logos, title and menus in a 288x208 box at (16, 16) inside a black border. While the game sets
-     // this, 2D draws (rectangles and scissors) are remapped so that box fills the 320x240 frame.
-     static std::atomic<bool> cardRemap{ false };
-diff --git a/src/hle/rt64_vi.h b/src/hle/rt64_vi.h
-index 5630c8d..72bc25e 100644
---- a/src/hle/rt64_vi.h
-+++ b/src/hle/rt64_vi.h
-@@ -39,6 +39,8 @@ namespace RT64 {
-     void setOutputBrightness(float brightness);
-     float getOutputBrightness();
-     bool isRaceHoleFill();
-+    void setFarScale(float scale);
-+    float getFarScale();
- 
-     struct VI {
-         union Status {

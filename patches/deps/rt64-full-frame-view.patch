@@ -186,7 +186,7 @@ index 2970e71..a57257c 100644
              present.screenVI = newVI;
              advancePresent(present, false);
 diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
-index a870166..c9ca7b5 100644
+index a870166..4501ed8 100644
 --- a/src/hle/rt64_vi.cpp
 +++ b/src/hle/rt64_vi.cpp
 @@ -3,6 +3,8 @@
@@ -198,7 +198,7 @@ index a870166..c9ca7b5 100644
  #include <cassert>
  #include <memory.h>
  #include <stdio.h>
-@@ -15,6 +17,87 @@
+@@ -15,6 +17,99 @@
  namespace RT64 {
      // VI
      
@@ -234,6 +234,18 @@ index a870166..c9ca7b5 100644
 +
 +    bool isRaceHoleFill() {
 +        return raceHoleFill.load();
++    }
++
++    // Set by the game during races when the draw distance is extended: the race camera's far plane is moved out by this
++    // much (see RSP::matrixCommon) and its depth branches always taken. 1 = original.
++    static std::atomic<float> farScale{ 1.0f };
++
++    void setFarScale(float scale) {
++        farScale.store(std::max(scale, 1.0f));
++    }
++
++    float getFarScale() {
++        return farScale.load();
 +    }
 +
 +    // GT64 lays out its logos, title and menus in a 288x208 box at (16, 16) inside a black border. While the game sets
@@ -287,7 +299,7 @@ index a870166..c9ca7b5 100644
          return { 0.0f, 0.0f, 1.0f, 1.0f };
      }
 diff --git a/src/hle/rt64_vi.h b/src/hle/rt64_vi.h
-index 5b70e01..5630c8d 100644
+index 5b70e01..72bc25e 100644
 --- a/src/hle/rt64_vi.h
 +++ b/src/hle/rt64_vi.h
 @@ -4,6 +4,8 @@
@@ -299,7 +311,7 @@ index 5b70e01..5630c8d 100644
  #include <array>
  #include <stdint.h>
  
-@@ -21,6 +23,23 @@
+@@ -21,6 +23,25 @@
  #define VI_STATUS_AA_MODE_NONE 3
  
  namespace RT64 {
@@ -319,6 +331,8 @@ index 5b70e01..5630c8d 100644
 +    void setOutputBrightness(float brightness);
 +    float getOutputBrightness();
 +    bool isRaceHoleFill();
++    void setFarScale(float scale);
++    float getFarScale();
 +
      struct VI {
          union Status {

@@ -56,6 +56,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   frames, so going into and out of races is clean.
 - **Analog throttle and brake.** With General > Analog Triggers on (the default), the throttle and brake follow how
   far the triggers (or any analog input bound to A and B) are pressed, on top of the game's own pedal ramp.
+- **Draw distance.** Graphics > Draw Distance: *Extended* (default) draws twice as many track sections ahead and more
+  behind, *Maximum* the whole track; both keep the most detailed track models at any distance and move the far plane
+  out, with fog and weather left where they were. *Original* matches the N64.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
@@ -135,6 +138,9 @@ Hooks in `gt64.us.toml` call native code in `src/game/enhancements.cpp`:
   `func_8002DB18`): analog triggers cap the game's pedal positions at how far the triggers are pressed;
 - the controller thread's replay record and playback (`func_800081F0`): replays store only buttons and stick, so
   the pedal amounts are kept with each recorded entry and applied again when it's played back;
+- the race view's track list (`func_8000A350`, `func_8000A280`, `func_8000A570`): more track sections, with list nodes
+  and matrices past the game's buffers in the Expansion Pak's free 4 MB and the streamed track geometry served from a
+  copy of its ROM block there;
 - the pak probes (`osPfsInitPak` in `func_80043CB4` and `func_8004447C`): the runtime always answers "no pak", so
   they answer as a Rumble Pak does and the game rumbles;
 - on every VI, the game mode (`0x800E8810`) picks widescreen or pillarbox (re-applied if a settings change brings
@@ -149,6 +155,8 @@ Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake
   one-pixel-short scissors widened (a line at the right edge), no gaps between wrapped rectangles, the softer car
   shadows, the credits' window box dropped, flags the game sets (full-frame view, race);
 - `rt64-raw-triangles-aspect.patch`: screen-space triangles keep their 4:3 place in widescreen;
+- `rt64-draw-distance.patch`: the race camera's far plane moved out (with its fog remapped to stay put) and its depth
+  branches always taken.
 - `rt64-crack-fill.patch`: the crack fill pass (`CrackFillPS.hlsl`, with MSAA variants): gaps up to one N64 pixel,
   up to three close to the camera where only the sky shows through, with the depth margin scaled for distant
   views; and the race view's bottom-row fill. Patches that touch the same files are made with `scripts/rt64_patch_diff.sh`;

@@ -28,6 +28,24 @@ static void add_graphics_options(recomp::config::Config &config) {
     );
 }
 
+static void add_draw_distance_option(recomp::config::Config &config) {
+    using EnumOptionVector = const std::vector<recomp::config::ConfigOptionEnumOption>;
+    static EnumOptionVector draw_distance_options = {
+        {gt::DrawDistance::Original, "Original", "Original"},
+        {gt::DrawDistance::Extended, "Extended", "Extended"},
+        {gt::DrawDistance::Maximum, "Maximum", "Maximum"},
+    };
+    config.add_enum_option(
+        gt::configkeys::graphics::draw_distance,
+        "Draw Distance",
+        "How much of the track is drawn in races. <recomp-color primary>Extended</recomp-color> draws about twice as far "
+        "ahead, <recomp-color primary>Maximum</recomp-color> the whole track; both keep the most detailed models at any "
+        "distance. Fog and weather are unchanged. <recomp-color primary>Original</recomp-color> matches the N64.",
+        draw_distance_options,
+        gt::DrawDistance::Extended
+    );
+}
+
 static void add_general_options(recomp::config::Config &config) {
     using EnumOptionVector = const std::vector<recomp::config::ConfigOptionEnumOption>;
 
@@ -52,6 +70,10 @@ gt::AnalogTriggers gt::get_analog_triggers() {
 template <typename T = uint32_t>
 T get_graphics_config_enum_value(const std::string& option_id) {
     return static_cast<T>(std::get<uint32_t>(recompui::config::get_graphics_config().get_option_value(option_id)));
+}
+
+gt::DrawDistance gt::get_draw_distance() {
+    return get_graphics_config_enum_value<gt::DrawDistance>(gt::configkeys::graphics::draw_distance);
 }
 
 gt::FrameRate gt::get_frame_rate() {
@@ -115,6 +137,7 @@ void gt::init_config() {
 
     auto &graphics_config = recompui::config::create_graphics_tab();
     add_graphics_options(graphics_config);
+    add_draw_distance_option(graphics_config);
 
     set_control_defaults();
     set_control_descriptions();

@@ -127,16 +127,6 @@ func = "func_80043990"
 before_vram = 0x80043A9C
 text = "{ void gt_rumble_log(int); gt_rumble_log(0); }"
 
-[[patches.hook]]
-func = "func_80009698"
-before_vram = 0x80009698
-text = "{ void gt_cull_candidates(uint8_t*, uint32_t, uint32_t); gt_cull_candidates(rdram, (uint32_t)ctx->r4, (uint32_t)ctx->r5); }"
-
-[[patches.hook]]
-func = "func_80008858"
-before_vram = 0x80008E14
-text = "{ void gt_buffer_use(uint8_t*); gt_buffer_use(rdram); }"
-
 # Draw distance: draw the whole track ring, with the node pool and matrices allowed into the Expansion Pak's 4 MB.
 [[patches.hook]]
 func = "func_8000A350"
@@ -160,15 +150,6 @@ text = "{ void gt_matrix_buffer(uint8_t*, uint32_t); gt_matrix_buffer(rdram, (ui
 
 [[patches.hook]]
 func = "func_8000A570"
-before_vram = 0x8000A7AC
-text = "{ void gt_gfx_after_track(uint8_t*); gt_gfx_after_track(rdram); }"
-
-[[patches.hook]]
-func = "func_8000A570"
 before_vram = 0x8000A624
 text = "{ void gt_track_segment(uint8_t*, recomp_context*); gt_track_segment(rdram, ctx); }"
 
-[[patches.hook]]
-func = "func_80009D58"
-before_vram = 0x8000A254
-text = "{ void gt_race_task(uint8_t*, uint32_t, uint32_t); gt_race_task(rdram, (uint32_t)ctx->r5, (uint32_t)ctx->r6); }"
