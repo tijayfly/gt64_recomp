@@ -606,10 +606,14 @@ extern "C" void gt_pedal_end(uint8_t* rdram, int brake) {
 // takes while the far plane is extended (RT64::setFarScale). Drawing more sections needs:
 // - more list nodes than the game's pool (128 nodes of 0x28 at D_8011A638..D_8011BA38): the rest go to the Expansion
 //   Pak's 4 MB, which GT64 doesn't use;
-// - more matrices than its buffers (0x6280 bytes each at D_8011EA48): moved there too;
+// - more matrices than its buffers (0x6280 bytes each at D_8011EA48) and more display list than its (0xA000 each at
+//   D_800FBFC8; the intro's split screen draws two race views a frame, and past the buffer is its own write pointer,
+//   D_8010FFC8): both moved there too;
 // - the sections' geometry: it's streamed (see gt_track_segment).
 namespace {
-    constexpr uint32_t ext_nodes = 0x80400000u;     // list nodes past the game's pool
+    constexpr uint32_t ext_nodes = 0x80400000u;     // list nodes past the game's pool (0x10000)
+    constexpr uint32_t ext_gfx = 0x80410000u;       // two display list buffers of 0x30000
+    constexpr uint32_t ext_gfx_size = 0x30000u;
     constexpr uint32_t ext_matrices = 0x80480000u;  // two matrix buffers of 0x40000
     constexpr uint32_t ext_matrix_size = 0x40000u;
     constexpr uint32_t ext_track = 0x80500000u;     // the track's geometry block, copied from ROM
@@ -685,9 +689,11 @@ extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
     wr32f(rdram, node + 0x20, float(rd64f(rdram, section + 0x18) - rd64f(rdram, cam + 0xE8)));
 }
 
-// The frame's matrix buffer (D_8012AF48, set per frame from buffer index `index`): in the Expansion Pak, 0x40000 each.
+// The frame's display list and matrix buffers (D_8010FFC8 and D_8012AF48, just set from buffer index `index`, nothing
+// written yet): in the Expansion Pak.
 extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
     if (extended_draw_distance()) {
+        wr32(rdram, 0x8010FFC8u, ext_gfx + (index & 1) * ext_gfx_size);
         wr32(rdram, 0x8012AF48u, ext_matrices + (index & 1) * ext_matrix_size);
     }
 }
