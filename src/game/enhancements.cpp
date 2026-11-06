@@ -1,6 +1,7 @@
 // Native helpers called from recompiler hooks (gt64.us.toml) to implement enhancements.
 #include <cstdint>
 #include <cstring>
+#include <map>
 
 #include "gt_config.h"
 
@@ -431,6 +432,49 @@ namespace {
     }
 }
 
+// Replays: the controller thread (func_800081F0) records each port's pad into a buffer (4 bytes per poll: buttons,
+// stick x, y; pointer at D_800E8844) and plays it back from there, so a replay only has the on/off A and B bits and
+// drifted from a race driven with analog pedals. Keep the pedal amounts the race used alongside it, keyed by the buffer
+// entry the game read that frame (with the entry's contents, so a different recording at the same place isn't used),
+// and apply them again when that entry is played back.
+namespace {
+    enum class PadSource { Live, Recording, Playback };
+    struct PadEntryUse {
+        PadSource source = PadSource::Live;
+        uint32_t entry = 0;
+        uint32_t poll = 0;
+    };
+    PadEntryUse pad_entry_use[2];
+    uint32_t controller_polls = 0;
+    struct RecordedPedals {
+        uint32_t contents;
+        float throttle;
+        float brake;
+    };
+    std::map<uint32_t, RecordedPedals> recorded_pedals;
+
+    uint32_t read_word(uint8_t* rdram, uint32_t addr) {
+        return *reinterpret_cast<uint32_t*>(rdram + (addr - 0x80000000u));
+    }
+}
+
+extern "C" void gt_controller_poll(uint8_t* rdram) {
+    controller_polls++;
+    static const bool log = std::getenv("GT_REPLAY_LOG") != nullptr;
+    if (log && (controller_polls % 120) == 0) {
+        const int16_t m0 = *reinterpret_cast<int16_t*>(rdram + ((0x800F1450u ^ 2) - 0x80000000u));
+        std::printf("[replay] poll %u port0 mode %d buffer %08X count %d\n", controller_polls, m0,
+            read_word(rdram, 0x800E8844), int32_t(read_word(rdram, 0x800E8848)));
+    }
+}
+
+extern "C" void gt_pad_entry(uint8_t* rdram, int port, uint32_t entry_ptr_addr, int playback) {
+    if (port < 0 || port >= 2) {
+        return;
+    }
+    pad_entry_use[port] = { playback ? PadSource::Playback : PadSource::Recording, read_word(rdram, entry_ptr_addr), controller_polls };
+}
+
 extern "C" void gt_analog_pedals(uint8_t* rdram, uint32_t control, uint32_t pad) {
     // pad = &D_800F1420[port] (OSContPad: u16 buttons, s8 x, s8 y, u8 errno, 6 bytes); control = car + 0x200.
     constexpr uint32_t pads = 0x800F1420;
@@ -440,26 +484,67 @@ extern "C" void gt_analog_pedals(uint8_t* rdram, uint32_t control, uint32_t pad)
     const int port = int((pad - pads) / 6);
     PedalCap& cap = pedal_caps[port];
     cap = PedalCap{};
-    if (gt::get_analog_triggers() != gt::AnalogTriggers::On) {
+    cap.car = control - 0x200;
+
+    // The buffer entry the controller thread recorded or played back for this port in its latest polls.
+    PadSource source = PadSource::Live;
+    uint32_t entry = 0;
+    if (port < 2 && pad_entry_use[port].entry != 0 && controller_polls - pad_entry_use[port].poll <= 2) {
+        source = pad_entry_use[port].source;
+        entry = pad_entry_use[port].entry;
+    }
+    if (source == PadSource::Playback) {
+        // The pedals recorded with this entry; the entry itself or, if the game read past it, the latest one before.
+        auto it = recorded_pedals.upper_bound(entry);
+        if (it != recorded_pedals.begin()) {
+            --it;
+            if (entry - it->first <= 16 && it->second.contents == read_word(rdram, it->first)) {
+                cap.throttle = it->second.throttle;
+                cap.brake = it->second.brake;
+            }
+        }
+        static const bool log = std::getenv("GT_REPLAY_LOG") != nullptr;
+        if (log) {
+            static int n = 0;
+            if ((n++ % 60) == 0) {
+                std::printf("[replay] port %d play entry %08X throttle %.2f brake %.2f\n", port, entry, cap.throttle, cap.brake);
+            }
+        }
         return;
     }
-    const uint16_t buttons = *reinterpret_cast<uint16_t*>(rdram + ((pad ^ 2) - 0x80000000u));
-    float throttle = n64_button_analog(port, recompinput::GameInput::A);
-    float brake = n64_button_analog(port, recompinput::GameInput::B);
-    // Testing: GT_PEDAL_TEST=<amount> stands in for the trigger while A is held (GT_INPUT).
-    static const char* test = std::getenv("GT_PEDAL_TEST");
-    if (test != nullptr && port == 0) {
-        throttle = (buttons & 0x8000) ? float(std::atof(test)) : 0.0f;
+
+    float throttle_cap = 1.0f, brake_cap = 1.0f;
+    if (gt::get_analog_triggers() == gt::AnalogTriggers::On) {
+        const uint16_t buttons = *reinterpret_cast<uint16_t*>(rdram + ((pad ^ 2) - 0x80000000u));
+        float throttle = n64_button_analog(port, recompinput::GameInput::A);
+        float brake = n64_button_analog(port, recompinput::GameInput::B);
+        // Testing: GT_PEDAL_TEST=<amount> stands in for the trigger while A is held (GT_INPUT).
+        static const char* test = std::getenv("GT_PEDAL_TEST");
+        if (test != nullptr && port == 0) {
+            throttle = (buttons & 0x8000) ? float(std::atof(test)) : 0.0f;
+        }
+        // Only cap when the game's A/B bits match the live inputs (the attract-mode demo feeds recorded inputs).
+        const bool live_a = throttle >= recompinput::axis_digital_threshold || test != nullptr;
+        const bool live_b = brake >= recompinput::axis_digital_threshold;
+        if (live_a == ((buttons & 0x8000) != 0)) {
+            throttle_cap = pedal_amount(throttle);
+        }
+        if (live_b == ((buttons & 0x4000) != 0)) {
+            brake_cap = pedal_amount(brake);
+        }
     }
-    // Only cap when the game's A/B bits match the live inputs: the attract-mode demo and replays feed recorded inputs.
-    const bool live_a = throttle >= recompinput::axis_digital_threshold || test != nullptr;
-    const bool live_b = brake >= recompinput::axis_digital_threshold;
-    cap.car = control - 0x200;
-    if (live_a == ((buttons & 0x8000) != 0)) {
-        cap.throttle = pedal_amount(throttle);
+    cap.throttle = throttle_cap;
+    cap.brake = brake_cap;
+    if (source == PadSource::Recording) {
+        recorded_pedals[entry] = { read_word(rdram, entry), throttle_cap, brake_cap };
     }
-    if (live_b == ((buttons & 0x4000) != 0)) {
-        cap.brake = pedal_amount(brake);
+    static const bool log = std::getenv("GT_REPLAY_LOG") != nullptr;
+    if (log) {
+        static int n = 0;
+        if ((n++ % 60) == 0) {
+            std::printf("[replay] port %d %s entry %08X throttle %.2f brake %.2f (%zu kept)\n", port,
+                source == PadSource::Recording ? "rec" : "live", entry, throttle_cap, brake_cap, recorded_pedals.size());
+        }
     }
 }
 
