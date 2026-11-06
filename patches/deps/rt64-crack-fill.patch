@@ -376,10 +376,10 @@ index 641f3ec..cc1eeb7 100644
          ShaderRecord videoInterfaceNearest;
 diff --git a/src/shaders/CrackFillPS.hlsl b/src/shaders/CrackFillPS.hlsl
 new file mode 100644
-index 0000000..1d2b20f
+index 0000000..2e26a69
 --- /dev/null
 +++ b/src/shaders/CrackFillPS.hlsl
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,131 @@
 +//
 +// RT64
 +//
@@ -465,7 +465,10 @@ index 0000000..1d2b20f
 +        }
 +    }
 +
-+    const float limit = depth - abs(gConstants.epsilon);
++    // How much nearer the sides must be. Depth bunches up near 1 with distance, so far away the fixed margin is more
++    // than the whole depth left to the far plane and cracks seen from there (GT64's zoomed-in replay cameras) stayed
++    // open: there the margin is a tenth of that remaining depth instead.
++    const float limit = depth - min(abs(gConstants.epsilon), 0.1f * (1.0f - depth));
 +    int bestGap = 0x7FFF;
 +    float4 best = float4(0.0f, 0.0f, 0.0f, 0.0f);
 +    for (int axis = 0; axis < 2; axis++) {
