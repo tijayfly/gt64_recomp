@@ -1,6 +1,7 @@
 // Native helpers called from recompiler hooks (gt64.us.toml) to implement enhancements.
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include "librecomp/game.hpp"
 #include <cstdio>
 #include <map>
@@ -659,10 +660,39 @@ namespace {
     uint32_t views_this_frame = 0;
     uint32_t views_last_frame = 0;
 
+    int32_t section_ring(uint8_t* rdram) {
+        return int32_t(rd16(rdram, 0x80114588u)) + 1;
+    }
+
+    // How far `sections` track sections reach: their average spacing on this track (measured once per track) times
+    // the count, plus a margin.
+    double object_reach(uint8_t* rdram, int32_t sections) {
+        static uint32_t measured_base = 0;
+        static double spacing = 0.0;
+        const uint32_t base = rd32(rdram, 0x80114584u);
+        const int32_t ring = section_ring(rdram);
+        if (base != measured_base && base >= 0x80000000u && base < 0x80800000u && ring > 1) {
+            double total = 0.0;
+            for (int32_t i = 0; i < ring; i++) {
+                const uint32_t a = base + i * 0x28, b = base + ((i + 1) % ring) * 0x28;
+                const double dx = rd64f(rdram, b + 0x08) - rd64f(rdram, a + 0x08);
+                const double dy = rd64f(rdram, b + 0x10) - rd64f(rdram, a + 0x10);
+                const double dz = rd64f(rdram, b + 0x18) - rd64f(rdram, a + 0x18);
+                total += std::sqrt(dx * dx + dy * dy + dz * dz);
+            }
+            spacing = total / ring;
+            measured_base = base;
+            if (std::getenv("GT_CULL_LOG")) {
+                std::printf("[cull] %d sections, %.0f units apart: objects within %.0f\n", ring, spacing, std::max(7000.0, spacing * sections * 1.1));
+            }
+        }
+        return std::max(7000.0, spacing * sections * 1.1);
+    }
+
     // Sections drawn behind and ahead of the camera's: Extended 10 and 20, Maximum the whole ring (Extended's counts while
     // the game draws more than one view a frame: the whole track several times over is too slow).
     void section_counts(uint8_t* rdram, int32_t& behind, int32_t& ahead) {
-        const int32_t ring = int32_t(rd16(rdram, 0x80114588u)) + 1;
+        const int32_t ring = section_ring(rdram);
         const uint32_t views = std::max(views_this_frame, views_last_frame);
         const bool all = (gt::get_draw_distance() == gt::DrawDistance::Maximum) && (views <= 1);
         behind = std::min(all ? ring : 10, (ring - 1) / 2);
@@ -673,18 +703,23 @@ namespace {
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     views_this_frame++;
     track_views++;
-    // Trackside scenery outside the ring (hedges, trees, stands: func_80009698) is culled by its angle and squared
-    // distance from the camera: always within 1000 units, out to 7000 inside a view cone meant for 4:3, 200 behind. With
-    // the extended draw distance it's all drawn.
+    // Objects outside the track ring (the cars, their wheels and shadows, and trackside scenery: each frame's object
+    // list, func_80009698) are culled by angle and squared distance from the camera: always within 1000 units, out to
+    // 7000 inside a view cone meant for 4:3, 200 behind. Extended draws them within the reach of the track it draws (so
+    // no cars beyond its end), Maximum all of them.
     const bool extended = extended_draw_distance();
-    wr64f(rdram, 0x800AA608u, extended ? 1e12 : 1e6);
-    wr64f(rdram, 0x800AA610u, extended ? 1e12 : 4.9e7);
-    wr64f(rdram, 0x800AA618u, extended ? 1e12 : 4e4);
     if (!extended) {
+        wr64f(rdram, 0x800AA608u, 1e6);
+        wr64f(rdram, 0x800AA610u, 4.9e7);
+        wr64f(rdram, 0x800AA618u, 4e4);
         return count;
     }
     int32_t behind, ahead;
     section_counts(rdram, behind, ahead);
+    const double reach = (ahead >= section_ring(rdram) / 2) ? 1e6 : object_reach(rdram, ahead);
+    wr64f(rdram, 0x800AA608u, reach * reach);
+    wr64f(rdram, 0x800AA610u, reach * reach);
+    wr64f(rdram, 0x800AA618u, reach * reach);
     return std::max(count, behind);
 }
 

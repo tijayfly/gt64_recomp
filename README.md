@@ -57,8 +57,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Analog throttle and brake.** With General > Analog Triggers on (the default), the throttle and brake follow how
   far the triggers (or any analog input bound to A and B) are pressed, on top of the game's own pedal ramp.
 - **Draw distance.** Graphics > Draw Distance: *Maximum* (default) draws the whole track (*Extended* in split screen),
-  *Extended* twice as many track sections ahead and more behind; both draw all the trackside scenery (it was culled
-  by a view cone meant for 4:3, so it went missing at the edges of the widescreen view) and keep the most detailed track models at any distance and move the far plane
+  *Extended* twice as many track sections ahead and more behind; cars, their shadows and trackside scenery are drawn
+  as far as the track is (the game culled them with a view cone meant for 4:3, so they went missing at the edges of
+  the widescreen view), and both keep the most detailed track models at any distance and move the far plane
   out, with fog and weather left where they were. *Original* matches the N64.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
@@ -176,7 +177,7 @@ stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_
 fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for tuning the fill), `GT_NO_SHADOW_FIX`,
 `GT_KEEP_WINDOW_BOX` (keep the credits' translucent box), `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A is
 held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_RUMBLE_LOG`
-(pak probes, motor on and off), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
+(pak probes, motor on and off), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
 
 </details>
 
