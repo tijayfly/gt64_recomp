@@ -106,6 +106,7 @@ namespace {
     // they draw a race (a full-frame 3D view).
     constexpr uint32_t race_modes_start = 0x80004240;
     uint32_t full_view_vi = 0;  // last VI on which a full-frame 3D view was built
+    uint32_t track_views = 0;   // track ring views built (func_8000A350: races, replays, the intro and attract demo)
     bool pillarboxed = false;
     // The aspect ratio to go back to after a pillarboxed screen (the saved setting: Expand or Manual).
     ultramodern::renderer::AspectRatio widescreen_ar = ultramodern::renderer::AspectRatio::Expand;
@@ -219,9 +220,16 @@ void gt::widescreen_on_vi() {
         if (log && int(race) != last) { fprintf(stderr, "[race] %d mode=%08X t=%.2f\n", int(race), mode, std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count()); last = race; }
     }
     RT64::setRaceHoleFill(race);
-    // Draw distance: move the race camera's far plane out and always take the depth branches (the track sections' LOD
-    // and distance cut-off); see gt_sections_ahead.
-    RT64::setFarScale((race && gt::get_draw_distance() != gt::DrawDistance::Original) ? 16.0f : 1.0f);
+    // Draw distance: while the track is being drawn (races, and also the intro and attract demo, which aren't race
+    // modes), move the camera's far plane out and always take the depth branches (the track sections' LOD and distance
+    // cut-off); see gt_sections_ahead.
+    static uint32_t last_track_views = 0, track_view_vi = 0;
+    if (track_views != last_track_views) {
+        last_track_views = track_views;
+        track_view_vi = vi_count;
+    }
+    const bool track_drawn = (track_view_vi != 0) && (vi_count - track_view_vi <= 4);
+    RT64::setFarScale((track_drawn && gt::get_draw_distance() != gt::DrawDistance::Original) ? 16.0f : 1.0f);
     // Into a race, the game cross-fades from the last 4:3 frame (the start card) to the race, so switching the aspect
     // ratio as the race appears stretched the card for a moment. Fade the output through black instead: fade out
     // (still pillarboxed) as the card ends, hold black through loading until the race mode has begun and the
@@ -664,6 +672,7 @@ namespace {
 
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     views_this_frame++;
+    track_views++;
     // Trackside scenery outside the ring (hedges, trees, stands: func_80009698) is culled by its angle and squared
     // distance from the camera: always within 1000 units, out to 7000 inside a view cone meant for 4:3, 200 behind. With
     // the extended draw distance it's all drawn.
