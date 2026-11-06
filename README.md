@@ -42,6 +42,7 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   ones close to the camera and in replays. A few larger gaps in the track models are left as they are (they're in
   the original too)
 - [x] Custom app icon
+- [x] Rumble: the game finds a Rumble Pak in the controller; strength in General > Rumble Strength (0 turns it off)
 - [ ] Saves (Controller Pak; the runtime reports no pak, so the game offers to continue without saving)
 
 ## Enhancements
@@ -133,6 +134,8 @@ Hooks in `gt64.us.toml` call native code in `src/game/enhancements.cpp`:
   `func_8002DB18`): analog triggers cap the game's pedal positions at how far the triggers are pressed;
 - the controller thread's replay record and playback (`func_800081F0`): replays store only buttons and stick, so
   the pedal amounts are kept with each recorded entry and applied again when it's played back;
+- the pak probes (`osPfsInitPak` in `func_80043CB4` and `func_8004447C`): the runtime always answers "no pak", so
+  they answer as a Rumble Pak does and the game rumbles;
 - on every VI, the game mode (`0x800E8810`) picks widescreen or pillarbox (re-applied if a settings change brings
   back the saved aspect ratio) and the 2D box to stretch.
 
@@ -162,8 +165,8 @@ controller 1 from a file. `scripts/torace.sh <dir>` drives a run from boot into 
 stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_CRACK_FILL_DEBUG` (turn off the crack
 fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for tuning the fill), `GT_NO_SHADOW_FIX`,
 `GT_KEEP_WINDOW_BOX` (keep the credits' translucent box), `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A is
-held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_AR_RESET_TEST`
-(re-apply the saved aspect ratio every 5 s).
+held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_RUMBLE_LOG`
+(pak probes, motor on and off), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
 
 </details>
 

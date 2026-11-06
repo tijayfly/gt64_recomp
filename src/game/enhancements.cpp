@@ -458,6 +458,27 @@ namespace {
     }
 }
 
+// Rumble: the game probes each controller's pak with osPfsInitPak and, if that says the pak isn't a Controller Pak
+// (PFS_ERR_ID_FATAL / PFS_ERR_DEVICE, as a Rumble Pak answers), tries osMotorInit and then rumbles through
+// osMotorStart/Stop, which the runtime turns into controller rumble. The runtime's osPfsInitPak always answers "no pak",
+// so answer as a Rumble Pak would.
+extern "C" int32_t gt_pak_probe(int32_t port, int32_t result) {
+    constexpr int32_t pfs_err_nopack = 1;
+    constexpr int32_t pfs_err_device = 11;
+    static const bool log = std::getenv("GT_RUMBLE_LOG") != nullptr;
+    if (log) {
+        std::printf("[rumble] pak probe port %d: %d -> %d\n", port, result, result == pfs_err_nopack ? pfs_err_device : result);
+    }
+    return (result == pfs_err_nopack) ? pfs_err_device : result;
+}
+
+extern "C" void gt_rumble_log(int on) {
+    static const bool log = std::getenv("GT_RUMBLE_LOG") != nullptr;
+    if (log) {
+        std::printf("[rumble] motor %s\n", on ? "start" : "stop");
+    }
+}
+
 extern "C" void gt_controller_poll(uint8_t* rdram) {
     controller_polls++;
     static const bool log = std::getenv("GT_REPLAY_LOG") != nullptr;

@@ -125,9 +125,10 @@ ultramodern::input::connected_device_info_t get_connected_device_info(int contro
         ? controller_num == 0
         : recompinput::players::get_player_is_assigned(controller_num);
     if (connected) {
+        // A Rumble Pak in every controller: the game only rumbles once it finds one (see gt_pak_probe).
         return ultramodern::input::connected_device_info_t{
             .connected_device = ultramodern::input::Device::Controller,
-            .connected_pak = ultramodern::input::Pak::None,
+            .connected_pak = ultramodern::input::Pak::RumblePak,
         };
     }
 
