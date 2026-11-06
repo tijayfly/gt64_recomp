@@ -39,10 +39,10 @@ static void add_draw_distance_option(recomp::config::Config &config) {
         gt::configkeys::graphics::draw_distance,
         "Draw Distance",
         "How much of the track is drawn in races. <recomp-color primary>Extended</recomp-color> draws about twice as far "
-        "ahead, <recomp-color primary>Maximum</recomp-color> the whole track; both keep the most detailed models at any "
+        "ahead, <recomp-color primary>Maximum</recomp-color> the whole track (Extended in split screen); both keep the most detailed models at any "
         "distance. Fog and weather are unchanged. <recomp-color primary>Original</recomp-color> matches the N64.",
         draw_distance_options,
-        gt::DrawDistance::Extended
+        gt::DrawDistance::Maximum
     );
 }
 

@@ -22,7 +22,7 @@ namespace gt {
     enum class DrawDistance {
         Original, // the game's: its track sections near the camera, simpler models and nothing past about 5700 units
         Extended, // 20 sections ahead and 10 behind, detailed models at any distance, the far plane moved out
-        Maximum,  // the whole track
+        Maximum,  // the whole track (Extended's counts while more than one race view is drawn a frame)
     };
 
     enum class AnalogTriggers {

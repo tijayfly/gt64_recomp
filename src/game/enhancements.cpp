@@ -641,16 +641,23 @@ namespace {
         wr32(rdram, a, bits);
     }
 
-    // Sections drawn behind and ahead of the camera's: Extended 10 and 20, Maximum the whole ring.
+    // Race views drawn this frame and last (func_8000A350 runs once per view; the intro's split screen draws two).
+    uint32_t views_this_frame = 0;
+    uint32_t views_last_frame = 0;
+
+    // Sections drawn behind and ahead of the camera's: Extended 10 and 20, Maximum the whole ring (Extended's counts while
+    // the game draws more than one view a frame: the whole track several times over is too slow).
     void section_counts(uint8_t* rdram, int32_t& behind, int32_t& ahead) {
         const int32_t ring = int32_t(rd16(rdram, 0x80114588u)) + 1;
-        const bool all = gt::get_draw_distance() == gt::DrawDistance::Maximum;
+        const uint32_t views = std::max(views_this_frame, views_last_frame);
+        const bool all = (gt::get_draw_distance() == gt::DrawDistance::Maximum) && (views <= 1);
         behind = std::min(all ? ring : 10, (ring - 1) / 2);
         ahead = std::min(all ? ring : 20, ring - 1 - behind);
     }
 }
 
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
+    views_this_frame++;
     if (!extended_draw_distance()) {
         return count;
     }
@@ -692,6 +699,8 @@ extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
 // The frame's display list and matrix buffers (D_8010FFC8 and D_8012AF48, just set from buffer index `index`, nothing
 // written yet): in the Expansion Pak.
 extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
+    views_last_frame = views_this_frame;
+    views_this_frame = 0;
     if (extended_draw_distance()) {
         wr32(rdram, 0x8010FFC8u, ext_gfx + (index & 1) * ext_gfx_size);
         wr32(rdram, 0x8012AF48u, ext_matrices + (index & 1) * ext_matrix_size);
