@@ -4,7 +4,7 @@
 
 **GT 64: Championship Edition (N64, 1998), as a native PC program.**
 
-Gamepad support · any resolution · widescreen races · full-frame 4:3 screens
+Gamepad support · any resolution · widescreen races · full-frame 4:3 screens · extended draw distance
 
 </div>
 
@@ -56,11 +56,16 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   frames, so going into and out of races is clean.
 - **Analog throttle and brake.** With General > Analog Triggers on (the default), the throttle and brake follow how
   far the triggers (or any analog input bound to A and B) are pressed, on top of the game's own pedal ramp.
-- **Draw distance.** Graphics > Draw Distance: *Maximum* (default) draws the whole track (*Extended* in split screen),
-  *Extended* twice as many track sections ahead and more behind; cars, their shadows and trackside scenery are drawn
-  as far as the track is (the game culled them with a view cone meant for 4:3, so they went missing at the edges of
-  the widescreen view), and both keep the most detailed track models at any distance and move the far plane
-  out, with fog and weather left where they were. *Original* matches the N64.
+- **Draw distance.** Graphics > Draw Distance, three levels:
+  - *Maximum* (default): the whole track, every car, shadow and piece of trackside scenery, at any distance. Split
+    screen (the intro) uses *Extended*, as the whole track for each view is too slow.
+  - *Extended*: twice as much track ahead of the camera (20 sections instead of about 11) and more behind, with cars,
+    shadows and scenery drawn as far as the track reaches.
+  - *Original*: the game's own ranges.
+
+  Extended and Maximum also draw the most detailed track models at any distance, move the far plane out with fog and
+  weather left where they were, and draw scenery at the edges of the widescreen view, which the game culled with a
+  view cone sized for 4:3.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
