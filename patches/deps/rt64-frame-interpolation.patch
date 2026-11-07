@@ -818,10 +818,10 @@ index 5a331aa..b140c1c 100644
  
                  processCursor = -1;
 diff --git a/src/hle/rt64_workload_queue.h b/src/hle/rt64_workload_queue.h
-index bde2f03..7417564 100644
+index bde2f03..6cf7cca 100644
 --- a/src/hle/rt64_workload_queue.h
 +++ b/src/hle/rt64_workload_queue.h
-@@ -5,6 +5,42 @@
+@@ -5,6 +5,39 @@
  #pragma once
  
  #include <array>
@@ -830,7 +830,8 @@ index bde2f03..7417564 100644
 +#include <cstdio>
 +#include <cstdlib>
 +
-+// GT64 diagnostics (TEMP): time each RT64 thread spends waiting on the others, reported once a second.
++// GT64 diagnostics (GT_INTERP_LOG): time each RT64 thread spends waiting on the others and on frame matching, reported
++// once a second.
 +namespace RT64::GTDiag {
 +    inline std::atomic<uint64_t> renderWaitPresentUs{0}, renderWaitCountersUs{0}, presentWaitWorkloadUs{0}, presentWaitFramesUs{0},
 +        producerStallWorkloadUs{0}, producerStallPresentUs{0}, renderBusyUs{0}, matchUs{0}, matchPairs{0};
@@ -838,12 +839,8 @@ index bde2f03..7417564 100644
 +        framesPresented{0}, rate{0}, target{0};
 +    inline uint64_t nowUs() { return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
 +    inline bool enabled() {
-+#ifdef _WIN32
-+        return true;
-+#else
 +        static const bool on = std::getenv("GT_INTERP_LOG") != nullptr;
 +        return on;
-+#endif
 +    }
 +    inline void report() {
 +        static uint64_t last = nowUs();
@@ -864,7 +861,7 @@ index bde2f03..7417564 100644
  
  #include "common/rt64_enhancement_configuration.h"
  #include "common/rt64_profiling_timer.h"
-@@ -23,7 +59,7 @@
+@@ -23,7 +56,7 @@
  #   include "render/rt64_raytracing_shader_cache.h"
  #endif
  
@@ -873,7 +870,7 @@ index bde2f03..7417564 100644
  
  namespace RT64 {
      struct PresentQueue;
-@@ -64,6 +100,7 @@ namespace RT64 {
+@@ -64,6 +97,7 @@ namespace RT64 {
          std::array<Workload, WORKLOAD_QUEUE_SIZE> workloads;
          int threadCursor;
          int writeCursor;
@@ -881,7 +878,7 @@ index bde2f03..7417564 100644
          int barrierCursor;
          std::mutex cursorMutex;
          std::condition_variable cursorCondition;
-@@ -98,6 +135,8 @@ namespace RT64 {
+@@ -98,6 +132,8 @@ namespace RT64 {
          ProfilingTimer matchingProfiler = ProfilingTimer(120);
          ProfilingTimer workloadProfiler = ProfilingTimer(120);
          std::array<GameFrame, 2> gameFrames;
@@ -890,7 +887,7 @@ index bde2f03..7417564 100644
          uint32_t prevFrameIndex = uint32_t(gameFrames.size()) - 1;
          uint32_t curFrameIndex = 0;
  
-@@ -105,6 +144,7 @@ namespace RT64 {
+@@ -105,6 +141,7 @@ namespace RT64 {
          ~WorkloadQueue();
          void reset();
          void advanceToNextWorkload();

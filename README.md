@@ -4,15 +4,15 @@
 
 **GT 64: Championship Edition (N64, 1998), as a native PC program.**
 
-Gamepad support · any resolution · widescreen races · full-frame 4:3 screens · extended draw distance
+Gamepad support · any resolution · uncapped framerate · widescreen races · full-frame 4:3 screens · extended draw distance
 
 </div>
 
 ---
 
 > [!WARNING]
-> **Work in progress.** The boot logos, intro, menus and races are playable (tested on Windows; the Linux build
-> runs headless). Saving isn't working yet. See [Status](#status).
+> **Work in progress.** The boot logos, intro, menus, races, replays and saves work (tested on Windows; the Linux
+> build runs headless). See [Status](#status).
 
 This is a static recompilation of *GT 64: Championship Edition* (N64, USA) made with
 [N64Recomp](https://github.com/N64Recomp/N64Recomp). The game's MIPS code is translated to C, compiled for your PC
@@ -70,9 +70,10 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
-- **60 FPS and above by frame interpolation (testing).** Graphics > Refresh Rate set to Display (or Manual) draws extra
-  frames between the game's own, so races run at the display's refresh rate while the game itself, its physics and
-  replay playback keep their original 30 FPS timing. Replays and the intro stay at 30 FPS whatever the setting.
+- **Uncapped framerate.** Graphics > Refresh Rate: *Display* runs races at the display's refresh rate (60, 120, 144 Hz
+  and up), *Manual* at a rate you set, *Original* at the game's 30 FPS. The extra frames are drawn between the game's
+  own, so the game itself, its physics and replay playback keep their original timing. Replays and the intro stay
+  at 30 FPS whatever the setting.
 
 ## Building
 
@@ -192,7 +193,8 @@ fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for 
 held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_RUMBLE_LOG`
 (pak probes, motor on and off), `GT_PAK_LOG` (Controller Pak calls and save requests), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s). `GT_INTERP_HALF=<0..1>` draws every frame that far back
 toward the previous one (tests the frame matching headless, where the refresh rate can't be raised), `GT_CUT_LOG`
-(camera cuts left uninterpolated).
+(camera cuts left uninterpolated), `GT_INTERP_LOG` (once a second: frames matched and interpolated, matching time and
+how long RT64's threads waited on each other).
 
 On Windows the game's output goes to `GT64Recompiled.log` beside the exe, and a crash adds the exception and its
 location in the exe there.
