@@ -135,6 +135,13 @@ func = "func_80039AA4"
 before_vram = 0x80039AA4
 text = "{ void gt_slip_rumble(uint8_t*, uint32_t); gt_slip_rumble(rdram, (uint32_t)ctx->r4); }"
 
+# Spark chirp: a car's effects (func_8003FD5C) take its frame's event flags (t7 = its object, s3 = the flags); bits
+# 0xF00 are a wheel or the floor hitting the ground hard, which shows sparks.
+[[patches.hook]]
+func = "func_8003FD5C"
+before_vram = 0x8003FD94
+text = "{ void gt_spark_rumble(uint32_t, uint32_t); gt_spark_rumble((uint32_t)ctx->r15, (uint32_t)ctx->r19); }"
+
 # Draw distance: draw the whole track ring, with the node pool and matrices allowed into the Expansion Pak's 4 MB.
 [[patches.hook]]
 func = "func_8000A350"
