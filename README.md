@@ -60,6 +60,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **'RobotBox' custom automatic gearbox.** General > Automatic Gearbox > *RobotBox*: custom automatic gearbox logic
   inspired by [RobotBox for Assetto Corsa](https://github.com/tijayfly/robotbox). It gave faster lap times in testing.
   *Original* (the default) keeps the game's original shift logic.
+- **Slip rumble.** General > Slip Rumble (on by default): the controller rumbles while your wheels spin or the car
+  slides, stronger the more it slips, up to the feel of the game's cobbled-street rumble. The game's own rumble is
+  unchanged.
 - **Draw distance.** Graphics > Draw Distance, three levels:
   - *Maximum* (default): the whole track, every car, shadow and piece of trackside scenery, at any distance. Split
     screen (the intro) uses *Extended*, as the whole track for each view is too slow.
@@ -193,7 +196,7 @@ stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_
 fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for tuning the fill), `GT_NO_SHADOW_FIX`,
 `GT_KEEP_WINDOW_BOX` (keep the credits' translucent box), `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A is
 held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_RUMBLE_LOG`
-(pak probes, motor on and off), `GT_PAK_LOG` (Controller Pak calls and save requests), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s). `GT_INTERP_HALF=<0..1>` draws every frame that far back
+(pak probes, motor on and off, slip rumble), `GT_PAK_LOG` (Controller Pak calls and save requests), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s). `GT_INTERP_HALF=<0..1>` draws every frame that far back
 toward the previous one (tests the frame matching headless, where the refresh rate can't be raised), `GT_CUT_LOG`
 (camera cuts left uninterpolated), `GT_INTERP_LOG` (once a second: frames matched and interpolated, matching time and
 how long RT64's threads waited on each other).
