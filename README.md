@@ -70,9 +70,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
-- **60 FPS (under investigation).** The 60 FPS and display refresh rate options are hidden for now. Current issues:
-  - the game times some things per frame, so at 60 FPS races and the intro run too fast;
-  - RT64's interpolated frames (refresh rate set to Display) flash blue.
+- **60 FPS and above by frame interpolation (testing).** Graphics > Refresh Rate set to Display (or Manual) draws extra
+  frames between the game's own, so races, replays and the intro run at the display's refresh rate while the game
+  itself, its physics and replay playback keep their original 30 FPS timing. Camera cuts are shown as they are.
 
 ## Building
 
@@ -171,6 +171,10 @@ Patches to RT64 and N64ModernRuntime are in `patches/deps/` and applied by CMake
 - `rt64-crack-fill.patch`: the crack fill pass (`CrackFillPS.hlsl`, with MSAA variants): gaps up to one N64 pixel,
   up to three close to the camera where only the sky shows through, with the depth margin scaled for distant
   views; and the race view's bottom-row fill. Patches that touch the same files are made with `scripts/rt64_patch_diff.sh`;
+- `rt64-frame-interpolation.patch`: frame interpolation for a game that draws each frame in several tasks (clear,
+  sky, scene, player car, HUD): a frame's workloads are held until it's shown and rendered and interpolated as one,
+  scenes are matched within their own task, transforms by their position relative to the camera, and camera cuts
+  (a sharp turn or zoom in one frame) aren't interpolated;
 - `N64ModernRuntime-screen-update-after-vi-swap.patch`: present after the VI swap (flicker);
 - the rest are build and platform fixes shared with Mission: Impossible Recompiled.
 
@@ -186,7 +190,9 @@ stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_
 fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for tuning the fill), `GT_NO_SHADOW_FIX`,
 `GT_KEEP_WINDOW_BOX` (keep the credits' translucent box), `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A is
 held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_RUMBLE_LOG`
-(pak probes, motor on and off), `GT_PAK_LOG` (Controller Pak calls and save requests), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s).
+(pak probes, motor on and off), `GT_PAK_LOG` (Controller Pak calls and save requests), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s). `GT_INTERP_HALF=<0..1>` draws every frame that far back
+toward the previous one (tests the frame matching headless, where the refresh rate can't be raised), `GT_CUT_LOG`
+(camera cuts left uninterpolated).
 
 On Windows the game's output goes to `GT64Recompiled.log` beside the exe, and a crash adds the exception and its
 location in the exe there.

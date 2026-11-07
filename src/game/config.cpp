@@ -122,9 +122,8 @@ static void set_control_descriptions() {
     set_game_input_description(GameInput::START, "Pause.");
 }
 
-// RT64's "Display" refresh rate draws extra frames by interpolating between the game's frames, which needs per-object
-// matching GT64 doesn't provide: some in-between frames showed only the sky (blue flashes). The refresh rate is forced
-// to "Original" and its option hidden.
+// RT64's "Display" refresh rate draws extra frames by interpolating between the game's frames (made to work with GT64's
+// several tasks per frame by patches/deps/rt64-frame-interpolation.patch).
 void gt::init_config() {
     std::filesystem::path recomp_dir = recompui::file::get_app_folder_path();
     if (!recomp_dir.empty()) {

@@ -11,7 +11,7 @@ index 785de27..8890426 100644
          presentQueue->waitForPresentId(state->presentId);
          workloadQueue->waitForIdle();
 diff --git a/src/hle/rt64_game_frame.cpp b/src/hle/rt64_game_frame.cpp
-index 60f45f6..666d094 100644
+index 60f45f6..a2075d9 100644
 --- a/src/hle/rt64_game_frame.cpp
 +++ b/src/hle/rt64_game_frame.cpp
 @@ -48,6 +48,12 @@ namespace RT64 {
@@ -81,12 +81,49 @@ index 60f45f6..666d094 100644
                      const Workload &prevWorkload = workloadQueue.workloads[prevFirstProj.workloadIndex];
                      const FramebufferPair &prevFbPair = prevWorkload.fbPairs[prevFirstProj.fbPairIndex];
                      const Projection &prevProj = prevFbPair.projections[prevFirstProj.projectionIndex];
-@@ -585,12 +629,26 @@ namespace RT64 {
+@@ -585,12 +629,64 @@ namespace RT64 {
          const RigidBody *prevRigidBody;
          const hlslpp::float4x4 &firstCurViewProj = firstCurWorkload.drawData.viewProjTransforms[firstCurProj.transformsIndex];
          const hlslpp::float4x4 &firstPrevViewProj = firstPrevWorkload.drawData.viewProjTransforms[firstPrevProj.transformsIndex];
 +        const hlslpp::float4x4 &firstCurView = firstCurWorkload.drawData.viewTransforms[firstCurProj.transformsIndex];
 +        const hlslpp::float4x4 &firstPrevView = firstPrevWorkload.drawData.viewTransforms[firstPrevProj.transformsIndex];
++
++        // GT64: world transforms hold positions relative to the camera, so everything that stays put in the world moves by
++        // the same amount between frames (minus the camera's own movement). Find that shift as the most common one among
++        // the candidate pairs with the same orientation: those pairs are the scenery and track, and pair first.
++        thread_local std::unordered_map<int64_t, uint32_t> shiftBins;
++        shiftBins.clear();
++        const float ShiftBinSize = 0.25f;
++        auto shiftKey = [&](const hlslpp::float3 &d) {
++            const int64_t x = std::lround(float(d.x) / ShiftBinSize) & 0x1FFFFF;
++            const int64_t y = std::lround(float(d.y) / ShiftBinSize) & 0x1FFFFF;
++            const int64_t z = std::lround(float(d.z) / ShiftBinSize) & 0x1FFFFF;
++            return (x << 42) | (y << 21) | z;
++        };
++
++        auto sameOrientation = [](const hlslpp::float4x4 &a, const hlslpp::float4x4 &b) {
++            const float d = float(hlslpp::length(a[0].xyz - b[0].xyz) + hlslpp::length(a[1].xyz - b[1].xyz) + hlslpp::length(a[2].xyz - b[2].xyz));
++            return d < 1e-3f;
++        };
++
++        hlslpp::float3 staticShift = hlslpp::float3(0.0f, 0.0f, 0.0f);
++        uint32_t staticCount = 0;
++        for (const IndexPair &indices : transformCheckSet) {
++            const hlslpp::float4x4 &curTransform = firstCurWorkload.drawData.worldTransforms[indices.first];
++            const hlslpp::float4x4 &prevTransform = firstPrevWorkload.drawData.worldTransforms[indices.second];
++            if (!sameOrientation(curTransform, prevTransform)) {
++                continue;
++            }
++
++            const hlslpp::float3 shift = curTransform[3].xyz - prevTransform[3].xyz;
++            const uint32_t count = ++shiftBins[shiftKey(shift)];
++            if (count > staticCount) {
++                staticCount = count;
++                staticShift = shift;
++            }
++        }
++
++        const bool staticShiftKnown = (staticCount >= 3);
          for (const IndexPair &indices : transformCheckSet) {
              const hlslpp::float4x4 &curTransform = firstCurWorkload.drawData.worldTransforms[indices.first];
              const hlslpp::float4x4 &prevTransform = firstPrevWorkload.drawData.worldTransforms[indices.second];
@@ -100,7 +137,8 @@ index 60f45f6..666d094 100644
 +                const float worldDifference = float(hlslpp::length(curTransform[3].xyz - prevTransform[3].xyz));
 +                const hlslpp::float4 curViewPos = hlslpp::mul(curTransform[3], firstCurView);
 +                const hlslpp::float4 prevViewPos = hlslpp::mul(prevTransform[3], firstPrevView);
-+                const bool unmoved = (worldDifference < 1e-3f) && (matchResult.orientationDifference < 1e-4f);
++                const bool unmoved = sameOrientation(curTransform, prevTransform) && ((worldDifference < 1e-3f) ||
++                    (staticShiftKnown && (float(hlslpp::length(curTransform[3].xyz - prevTransform[3].xyz - staticShift)) < 0.1f)));
 +                matchResult.positionDifference = unmoved ? 0.0f : 1.0f + float(hlslpp::length(curViewPos.xyz - prevViewPos.xyz));
 +                matchResult.orientationDifference = unmoved ? 0.0f : matchResult.orientationDifference;
 +                matchResult.screenSpaceDifference = FLT_MAX;
@@ -109,7 +147,7 @@ index 60f45f6..666d094 100644
                  matchCandidates.emplace_back(indices.first, indices.second, matchResult.computeDifference());
              }
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index a57257c..c40576c 100644
+index a57257c..ebad6d9 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
 @@ -1799,9 +1799,39 @@ namespace RT64 {
@@ -155,7 +193,7 @@ index a57257c..c40576c 100644
  
          // Make sure the profiler starts after the workload is advanced to ignore any waiting time.
          dlCpuProfiler.reset();
-@@ -1860,7 +1890,25 @@ namespace RT64 {
+@@ -1860,7 +1890,28 @@ namespace RT64 {
          clearExtended();
      }
      
@@ -166,6 +204,9 @@ index a57257c..c40576c 100644
 +
 +        Workload &last = ext.workloadQueue->workloads[ext.workloadQueue->previousWriteCursor()];
 +        last.frameEnd = true;
++        // The group starts rendering once every present made so far has been processed: the previous group's in-between
++        // frames are then done with before this group's take over the shared frame counters.
++        last.presentId = presentId;
 +        publishedWorkloadId = heldLastWorkloadId;
 +        heldWorkloads = 0;
 +        heldTarget = 0;
@@ -181,7 +222,7 @@ index a57257c..c40576c 100644
          // If the debugger has paused the plugin, keep submitting the last workload and screen VI for rendering and a present event.
          if (debuggerInspector.paused && !fromEarlyPresent) {
              if (ext.userConfig->developerMode) {
-@@ -2689,6 +2737,9 @@ namespace RT64 {
+@@ -2689,6 +2740,9 @@ namespace RT64 {
      void State::advanceWorkload(Workload &workload, bool paused) {
          workload.workloadId = ++workloadId;
          workload.presentId = presentId;
@@ -191,7 +232,7 @@ index a57257c..c40576c 100644
          workload.debuggerCamera = debuggerInspector.camera;
          workload.debuggerRenderer = debuggerInspector.renderer;
          workload.paused = paused;
-@@ -2696,7 +2747,7 @@ namespace RT64 {
+@@ -2696,7 +2750,7 @@ namespace RT64 {
  
      void State::advancePresent(Present &present, bool paused) {
          present.presentId = ++presentId;
@@ -243,7 +284,7 @@ index 8ea27d5..7d2a177 100644
          struct {
              uint32_t testZIndexCount = 0;
 diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
-index 5a331aa..1d322a5 100644
+index 5a331aa..0762622 100644
 --- a/src/hle/rt64_workload_queue.cpp
 +++ b/src/hle/rt64_workload_queue.cpp
 @@ -42,6 +42,7 @@ namespace RT64 {
@@ -342,20 +383,28 @@ index 5a331aa..1d322a5 100644
                          }
                      }
                  }
-@@ -986,7 +1005,11 @@ namespace RT64 {
-                     matchingProfiler.log();
- 
-                     const bool displayRateAboveOriginal = (workload.viOriginalRate > 0) && (workloadConfig.targetRate > workload.viOriginalRate);
--                    generateInterpolatedFrames = !workload.paused && displayRateAboveOriginal && !interpolationTargetKey.isEmpty();
-+                    // GT64: no present since the last frame group (the game drew two frames within one VI): render this one
-+                    // without in-between frames rather than wait on the present thread for the last group's, which can
-+                    // itself be waiting for this group.
-+                    const bool newPresent = (lastPresentId != workload.presentId);
-+                    generateInterpolatedFrames = !workload.paused && displayRateAboveOriginal && !interpolationTargetKey.isEmpty() && newPresent;
- 
-                     const bool resetTicks = !generateInterpolatedFrames || (originalRateForTicks != workload.viOriginalRate) || (displayRateForTicks != workloadConfig.targetRate) || !displayRateAboveOriginal;
-                     if (resetTicks) {
-@@ -1106,8 +1129,10 @@ namespace RT64 {
+@@ -1030,8 +1049,10 @@ namespace RT64 {
+                 // If the same set of counters is used, we wait until the presentation of its targets is finished so the targets are available to use. Waiting is ignored
+                 // if the frame counter has never presented anything yet, as it'll only be a valid value if the previous present event actually did something.
+                 else if (generateInterpolatedFrames) {
++                    // GT64: the waits between this thread and the present thread can deadlock with a frame drawn in several
++                    // workloads (each waits on the other); give up after a few frames' time, at worst losing an in-between frame.
+                     std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
+-                    ext.sharedResources->interpolatedCondition.wait(interpolatedLock, [&]() {
++                    ext.sharedResources->interpolatedCondition.wait_for(interpolatedLock, std::chrono::milliseconds(100), [&]() {
+                         return (prevFrameCounters.presented == 0) || (prevFrameCounters.presented >= prevFrameCounters.available);
+                     });
+                 }
+@@ -1092,7 +1113,7 @@ namespace RT64 {
+                             if (useDifferentCounters && (prevFrameCounters.available > 0) && (targetIndex < prevFrameCounters.available)) {
+                                 // Wait until the target has finished presenting if the alternate frame counter (used by the present queue) is making use of this target.
+                                 std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
+-                                ext.sharedResources->interpolatedCondition.wait(interpolatedLock, [&]() {
++                                ext.sharedResources->interpolatedCondition.wait_for(interpolatedLock, std::chrono::milliseconds(100), [&]() {
+                                     frameReduction = frameReduction || (prevFrameCounters.presented <= targetIndex);
+                                     return prevFrameCounters.presented > targetIndex;
+                                 });
+@@ -1106,8 +1127,10 @@ namespace RT64 {
                          prevFrameWeight = 1.0f - curFrameWeight;
                      }
                      else {
@@ -368,7 +417,7 @@ index 5a331aa..1d322a5 100644
                      }
  
                      const bool uploadExtras = (frame == 0) && workloadConfig.raytracingEnabled;
-@@ -1132,7 +1157,7 @@ namespace RT64 {
+@@ -1132,7 +1155,7 @@ namespace RT64 {
                      if (generateInterpolatedFrames && (usingMSAA || (frame > 0))) {
                          {
                              std::scoped_lock<std::mutex> cursorLock(cursorMutex);
@@ -377,7 +426,7 @@ index 5a331aa..1d322a5 100644
                          }
  
                          {
-@@ -1165,7 +1190,9 @@ namespace RT64 {
+@@ -1165,7 +1188,9 @@ namespace RT64 {
                  threadConfigurationValidate();
  
                  if (!workload.paused) {
