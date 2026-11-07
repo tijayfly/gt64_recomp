@@ -8,6 +8,7 @@ namespace gt {
         namespace graphics {
             inline const std::string frame_rate = "frame_rate";
             inline const std::string draw_distance = "draw_distance";
+            inline const std::string hd_wheels = "hd_wheels";
         }
         namespace general {
             inline const std::string analog_triggers = "analog_triggers";
@@ -42,12 +43,18 @@ namespace gt {
         On, // rumble while the car's wheels spin or it slides, harder the more it slips
     };
 
+    enum class HdWheels {
+        Off, // the game's six-sided wheels
+        On,  // smooth, many-sided wheels built from them
+    };
+
     void init_config();
     FrameRate get_frame_rate();
     AnalogTriggers get_analog_triggers();
     AutoGearbox get_auto_gearbox();
     SlipRumble get_slip_rumble();
     DrawDistance get_draw_distance();
+    HdWheels get_hd_wheels();
 }
 
 #endif
