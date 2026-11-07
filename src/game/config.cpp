@@ -61,6 +61,25 @@ static void add_general_options(recomp::config::Config &config) {
         analog_trigger_options,
         gt::AnalogTriggers::On
     );
+
+    static EnumOptionVector auto_gearbox_options = {
+        {gt::AutoGearbox::Original, "Original", "Original"},
+        {gt::AutoGearbox::Custom, "Custom", "RobotBox"},  // saved as Custom
+    };
+    config.add_enum_option(
+        gt::configkeys::general::auto_gearbox,
+        "Automatic Gearbox",
+        "How the automatic transmission shifts. <recomp-color primary>RobotBox</recomp-color> is custom automatic "
+        "gearbox logic inspired by RobotBox for Assetto Corsa: it shifts up above 90% of the rev limit and down below "
+        "55% (never into neutral or reverse), and gave faster lap times in testing. "
+        "<recomp-color primary>Original</recomp-color> uses each car's shift points, like the N64.",
+        auto_gearbox_options,
+        gt::AutoGearbox::Original
+    );
+}
+
+gt::AutoGearbox gt::get_auto_gearbox() {
+    return static_cast<gt::AutoGearbox>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::auto_gearbox)));
 }
 
 gt::AnalogTriggers gt::get_analog_triggers() {

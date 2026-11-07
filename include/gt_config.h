@@ -11,6 +11,7 @@ namespace gt {
         }
         namespace general {
             inline const std::string analog_triggers = "analog_triggers";
+            inline const std::string auto_gearbox = "auto_gearbox";
         }
     }
 
@@ -30,9 +31,15 @@ namespace gt {
         On,  // throttle and brake follow how far the buttons bound to A and B are pressed
     };
 
+    enum class AutoGearbox {
+        Original, // the game's shift points (per car)
+        Custom,   // up at 90% of the 10000 RPM rev limit, down at 55% (never into neutral or reverse)
+    };
+
     void init_config();
     FrameRate get_frame_rate();
     AnalogTriggers get_analog_triggers();
+    AutoGearbox get_auto_gearbox();
     DrawDistance get_draw_distance();
 }
 

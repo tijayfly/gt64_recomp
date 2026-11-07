@@ -831,3 +831,94 @@ extern "C" void gt_save_request(uint8_t* rdram, uint32_t request) {
         std::fprintf(stderr, "[save] request %d (mode %08X)\n", int(int16_t(rd16(rdram, request))), rd32(rdram, 0x800E8810u));
     }
 }
+
+
+// Automatic gearbox (General > Automatic Gearbox: Original or RobotBox, the Custom setting).
+// Each car's gearbox runs in func_8003412C: with an automatic transmission it calls func_800338B4, which takes the car
+// out of neutral, handles reverse, and shifts up when the engine speed (double at car +0x100) reaches the car's upshift
+// point and down (from 2nd or higher, with a pedal pressed) when it falls to its downshift point. The points are a
+// table of float pairs at 0x80093158 indexed by car +0x2D0; the rev limit is 10000 RPM for every car. Custom swaps in
+// 9000 and 5500 RPM for that call, for cars driven from a controller (live or a replay's recording, so the replay
+// shifts the same), and also shifts down below 5500 with no pedal pressed. The gear is car +0x178: 0 reverse,
+// 1 neutral, 2 first.
+extern "C" void func_80034048(uint8_t* rdram, recomp_context* ctx);
+
+namespace {
+    constexpr uint32_t shift_points = 0x80093158;
+    constexpr float custom_up = 9000.0f;
+    constexpr float custom_down = 5500.0f;
+    uint32_t gearbox_car = 0;
+    uint32_t gearbox_entry = 0;
+    uint32_t saved_points[2];
+
+    bool controller_car(uint32_t car) {
+        for (const PedalCap& cap : pedal_caps) {
+            if (cap.car == car) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    double read_double(uint8_t* rdram, uint32_t a) {
+        const uint64_t bits = (uint64_t(read_word(rdram, a)) << 32) | read_word(rdram, a + 4);
+        double v;
+        std::memcpy(&v, &bits, sizeof(v));
+        return v;
+    }
+
+    int16_t read_half(uint8_t* rdram, uint32_t a) {
+        return int16_t(*reinterpret_cast<uint16_t*>(rdram + ((a ^ 2) - 0x80000000u)));
+    }
+
+    void write_float(uint8_t* rdram, uint32_t a, float f) {
+        uint32_t bits;
+        std::memcpy(&bits, &f, sizeof(bits));
+        *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u)) = bits;
+    }
+}
+
+// Before the automatic gearbox (func_800338B4) runs for `car`.
+extern "C" void gt_auto_gearbox_begin(uint8_t* rdram, uint32_t car) {
+    gearbox_car = 0;
+    if (gt::get_auto_gearbox() != gt::AutoGearbox::Custom || !controller_car(car)) {
+        return;
+    }
+    const uint32_t index = read_word(rdram, car + 0x2D0);
+    if (index >= 64) {
+        return;
+    }
+    gearbox_car = car;
+    gearbox_entry = shift_points + index * 8;
+    saved_points[0] = read_word(rdram, gearbox_entry);
+    saved_points[1] = read_word(rdram, gearbox_entry + 4);
+    write_float(rdram, gearbox_entry, custom_up);
+    write_float(rdram, gearbox_entry + 4, custom_down);
+}
+
+// After it: put the car's shift points back, and shift down when coasting below the downshift point.
+extern "C" void gt_auto_gearbox_end(uint8_t* rdram, recomp_context* ctx) {
+    if (gearbox_car == 0) {
+        return;
+    }
+    const uint32_t car = gearbox_car;
+    gearbox_car = 0;
+    *reinterpret_cast<uint32_t*>(rdram + (gearbox_entry - 0x80000000u)) = saved_points[0];
+    *reinterpret_cast<uint32_t*>(rdram + (gearbox_entry + 4 - 0x80000000u)) = saved_points[1];
+
+    const int gear = read_half(rdram, car + 0x178);
+    static const bool coast_test = std::getenv("GT_GEAR_COAST_TEST") != nullptr;  // testing: as if no pedal is pressed
+    const bool pedal = !coast_test && (read_half(rdram, car + 0x200) != 0 || read_half(rdram, car + 0x204) != 0);
+    if (gear >= 3 && !pedal && read_double(rdram, car + 0x100) <= custom_down) {
+        ctx->r4 = int64_t(int32_t(car));  // registers hold sign-extended 32-bit values
+        func_80034048(rdram, ctx);
+    }
+    static const bool log = std::getenv("GT_GEAR_LOG") != nullptr;
+    if (log) {
+        static int last_gear = -1;
+        if (gear != last_gear) {
+            std::printf("[gear] car %08X gear %d at %.0f RPM\n", car, read_half(rdram, car + 0x178) - 1, read_double(rdram, car + 0x100));
+            last_gear = gear;
+        }
+    }
+}

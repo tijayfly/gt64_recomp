@@ -161,3 +161,16 @@ text = "{ void gt_track_segment(uint8_t*, recomp_context*); gt_track_segment(rdr
 func = "func_80005B80"
 before_vram = 0x80005B80
 text = "{ void gt_save_request(uint8_t*, uint32_t); gt_save_request(rdram, (uint32_t)ctx->r4); }"
+
+
+# Automatic gearbox (src/game/enhancements.cpp): around the automatic transmission call in the gearbox routine
+# (a0 = car), swap in the custom shift points, then restore them.
+[[patches.hook]]
+func = "func_8003412C"
+before_vram = 0x8003414C
+text = "{ void gt_auto_gearbox_begin(uint8_t*, uint32_t); gt_auto_gearbox_begin(rdram, (uint32_t)ctx->r4); }"
+
+[[patches.hook]]
+func = "func_8003412C"
+before_vram = 0x80034154
+text = "{ void gt_auto_gearbox_end(uint8_t*, recomp_context*); gt_auto_gearbox_end(rdram, ctx); }"
