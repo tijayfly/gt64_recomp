@@ -11,7 +11,7 @@ index 785de27..8890426 100644
          presentQueue->waitForPresentId(state->presentId);
          workloadQueue->waitForIdle();
 diff --git a/src/hle/rt64_game_frame.cpp b/src/hle/rt64_game_frame.cpp
-index 60f45f6..a2075d9 100644
+index 60f45f6..d2311a5 100644
 --- a/src/hle/rt64_game_frame.cpp
 +++ b/src/hle/rt64_game_frame.cpp
 @@ -48,6 +48,12 @@ namespace RT64 {
@@ -81,71 +81,349 @@ index 60f45f6..a2075d9 100644
                      const Workload &prevWorkload = workloadQueue.workloads[prevFirstProj.workloadIndex];
                      const FramebufferPair &prevFbPair = prevWorkload.fbPairs[prevFirstProj.fbPairIndex];
                      const Projection &prevProj = prevFbPair.projections[prevFirstProj.projectionIndex];
-@@ -585,12 +629,64 @@ namespace RT64 {
-         const RigidBody *prevRigidBody;
-         const hlslpp::float4x4 &firstCurViewProj = firstCurWorkload.drawData.viewProjTransforms[firstCurProj.transformsIndex];
-         const hlslpp::float4x4 &firstPrevViewProj = firstPrevWorkload.drawData.viewProjTransforms[firstPrevProj.transformsIndex];
-+        const hlslpp::float4x4 &firstCurView = firstCurWorkload.drawData.viewTransforms[firstCurProj.transformsIndex];
-+        const hlslpp::float4x4 &firstPrevView = firstPrevWorkload.drawData.viewTransforms[firstPrevProj.transformsIndex];
+@@ -509,49 +553,85 @@ namespace RT64 {
+             buildCallHashMap(p, prevWorkload, prevProj, prevCallHashMap);
+         }
+ 
+-        // FIXME: Transform set needs to be done per unique workload detected.
+-        thread_local std::set<IndexPair> transformCheckSet;
++        // GT64: matching is kept close to linear in the number of draws. With a long draw distance a frame has hundreds of
++        // identical scenery pieces, and pairing every draw with every same-looking draw of the previous frame (RT64's
++        // approach) took a large part of a second per frame.
+         thread_local std::set<IndexPair> tileCheckSet;
+         thread_local std::set<IndexPair> lookAtCheckSet;
+-        transformCheckSet.clear();
+         tileCheckSet.clear();
+         lookAtCheckSet.clear();
+ 
+-        // Traverse the map and fill the set with all the combinations of transforms to check.
+-        for (std::pair<uint64_t, GameCallMap> curIt : curCallHashMap) {
+-            auto prevRange = prevCallHashMap.equal_range(curIt.first);
+-            for (auto prevIt = prevRange.first; prevIt != prevRange.second; prevIt++) {
+-                const GameIndices::Projection &curProjIndices = curScene.projections[curIt.second.sceneProjIndex];
++        // The world matrices each kind of draw uses, in draw order, each matrix once. A kind is the call's hash, its
++        // number of matrices and the matrix's place among them.
++        thread_local std::unordered_map<uint64_t, std::vector<uint32_t>> curKindMatrices;
++        thread_local std::unordered_map<uint64_t, std::vector<uint32_t>> prevKindMatrices;
++        thread_local std::vector<uint64_t> kindOrder;
++        thread_local std::vector<uint8_t> curMatrixSeen;
++        thread_local std::vector<uint8_t> prevMatrixSeen;
++        curKindMatrices.clear();
++        prevKindMatrices.clear();
++        kindOrder.clear();
++        curMatrixSeen.assign(firstCurWorkload.drawData.worldTransforms.size(), 0);
++        prevMatrixSeen.assign(firstPrevWorkload.drawData.worldTransforms.size(), 0);
++        auto collectMatrices = [&](const std::multimap<uint64_t, GameCallMap> &callHashMap, const GameScene &scene, std::unordered_map<uint64_t, std::vector<uint32_t>> &kindMatrices,
++            std::vector<uint8_t> &matrixSeen, bool addKinds)
++        {
++            for (const auto &it : callHashMap) {
++                if (!it.second.doTransformMatching) {
++                    continue;
++                }
 +
-+        // GT64: world transforms hold positions relative to the camera, so everything that stays put in the world moves by
-+        // the same amount between frames (minus the camera's own movement). Find that shift as the most common one among
-+        // the candidate pairs with the same orientation: those pairs are the scenery and track, and pair first.
-+        thread_local std::unordered_map<int64_t, uint32_t> shiftBins;
-+        shiftBins.clear();
-+        const float ShiftBinSize = 0.25f;
-+        auto shiftKey = [&](const hlslpp::float3 &d) {
-+            const int64_t x = std::lround(float(d.x) / ShiftBinSize) & 0x1FFFFF;
-+            const int64_t y = std::lround(float(d.y) / ShiftBinSize) & 0x1FFFFF;
-+            const int64_t z = std::lround(float(d.z) / ShiftBinSize) & 0x1FFFFF;
-+            return (x << 42) | (y << 21) | z;
++                const GameIndices::Projection &projIndices = scene.projections[it.second.sceneProjIndex];
++                const Workload &workload = workloadQueue.workloads[projIndices.workloadIndex];
++                const Projection &proj = workload.fbPairs[projIndices.fbPairIndex].projections[projIndices.projectionIndex];
++                const GameCall &call = proj.gameCalls[it.second.callIndex];
++                const uint32_t matrixCount = (call.callDesc.maxWorldMatrix - call.callDesc.minWorldMatrix) + 1;
++                for (uint32_t w = 0; w < matrixCount; w++) {
++                    const uint32_t matrix = call.callDesc.minWorldMatrix + w;
++                    if ((matrix >= matrixSeen.size()) || matrixSeen[matrix]) {
++                        continue;
++                    }
++
++                    const TransformGroup &group = workload.drawData.transformGroups[workload.drawData.worldTransformGroups[matrix]];
++                    if (!((group.matrixId == G_EX_ID_AUTO) || ((group.matrixId != G_EX_ID_IGNORE) && (group.ordering == G_EX_ORDER_AUTO)))) {
++                        continue;
++                    }
++
++                    matrixSeen[matrix] = 1;
++                    const uint64_t kind = (it.first * 1099511628211ULL) ^ (uint64_t(matrixCount) << 48) ^ (uint64_t(w) << 32);
++                    auto &list = kindMatrices[kind];
++                    if (addKinds && list.empty()) {
++                        kindOrder.emplace_back(kind);
++                    }
++
++                    list.emplace_back(matrix);
++                }
++            }
 +        };
 +
++        collectMatrices(curCallHashMap, curScene, curKindMatrices, curMatrixSeen, true);
++        collectMatrices(prevCallHashMap, prevScene, prevKindMatrices, prevMatrixSeen, false);
++
++        // Tiles and look at: pair the calls of each hash in order.
++        for (auto rangeIt = curCallHashMap.begin(); rangeIt != curCallHashMap.end(); ) {
++            auto curRange = curCallHashMap.equal_range(rangeIt->first);
++            auto prevRange = prevCallHashMap.equal_range(rangeIt->first);
++            rangeIt = curRange.second;
++            auto prevIt = prevRange.first;
++            for (auto curIt = curRange.first; (curIt != curRange.second) && (prevIt != prevRange.second); curIt++, prevIt++) {
++                const GameIndices::Projection &curProjIndices = curScene.projections[curIt->second.sceneProjIndex];
+                 const Workload &curWorkload = workloadQueue.workloads[curProjIndices.workloadIndex];
+-                const FramebufferPair &curFbPair = curWorkload.fbPairs[curProjIndices.fbPairIndex];
+-                const Projection &curProj = curFbPair.projections[curProjIndices.projectionIndex];
+-                const GameCall &curCall = curProj.gameCalls[curIt.second.callIndex];
++                const Projection &curProj = curWorkload.fbPairs[curProjIndices.fbPairIndex].projections[curProjIndices.projectionIndex];
++                const GameCall &curCall = curProj.gameCalls[curIt->second.callIndex];
+                 const GameIndices::Projection &prevProjIndices = prevScene.projections[prevIt->second.sceneProjIndex];
+                 const Workload &prevWorkload = workloadQueue.workloads[prevProjIndices.workloadIndex];
+-                const FramebufferPair &prevFbPair = prevWorkload.fbPairs[prevProjIndices.fbPairIndex];
+-                const Projection &prevProj = prevFbPair.projections[prevProjIndices.projectionIndex];
++                const Projection &prevProj = prevWorkload.fbPairs[prevProjIndices.fbPairIndex].projections[prevProjIndices.projectionIndex];
+                 const GameCall &prevCall = prevProj.gameCalls[prevIt->second.callIndex];
+-                const uint32_t curWorldMatrixCount = (curCall.callDesc.maxWorldMatrix - curCall.callDesc.minWorldMatrix) + 1;
+-                const uint32_t prevWorldMatrixCount = (prevCall.callDesc.maxWorldMatrix - prevCall.callDesc.minWorldMatrix) + 1;
+-                if ((curWorldMatrixCount == prevWorldMatrixCount) && curIt.second.doTransformMatching && prevIt->second.doTransformMatching) {
+-                    for (uint32_t w = 0; w < curWorldMatrixCount; w++) {
+-                        const uint32_t curWorldMatrix = curCall.callDesc.minWorldMatrix + w;
+-                        const uint32_t curGroupIndex = curWorkload.drawData.worldTransformGroups[curWorldMatrix];
+-                        const TransformGroup &curGroup = curWorkload.drawData.transformGroups[curGroupIndex];
+-                        const uint32_t prevWorldMatrix = prevCall.callDesc.minWorldMatrix + w;
+-                        const uint32_t prevGroupIndex = prevWorkload.drawData.worldTransformGroups[prevWorldMatrix];
+-                        const TransformGroup &prevGroup = prevWorkload.drawData.transformGroups[prevGroupIndex];
+-                        if ((curGroup.matrixId == prevGroup.matrixId) && ((curGroup.matrixId == G_EX_ID_AUTO) || ((curGroup.matrixId != G_EX_ID_IGNORE) && (curGroup.ordering == G_EX_ORDER_AUTO)))) {
+-                            transformCheckSet.emplace(curWorldMatrix, prevWorldMatrix);
+-                        }
+-                    }
+-                }
+-
+-                if ((curCall.callDesc.tileCount == prevCall.callDesc.tileCount) && (curIt.second.doTileInterpolation && prevIt->second.doTileInterpolation)) {
++                if ((curCall.callDesc.tileCount == prevCall.callDesc.tileCount) && (curIt->second.doTileInterpolation && prevIt->second.doTileInterpolation)) {
+                     for (uint32_t t = 0; t < curCall.callDesc.tileCount; t++) {
+                         const DrawCallTile &curCallTile = curWorkload.drawData.callTiles[curCall.callDesc.tileIndex + t];
+                         const DrawCallTile &prevCallTile = prevWorkload.drawData.callTiles[prevCall.callDesc.tileIndex + t];
+-                        bool doTileMatching = curIt.second.doTileMatching && prevIt->second.doTileMatching;
++                        bool doTileMatching = curIt->second.doTileMatching && prevIt->second.doTileMatching;
+                         if (doTileMatching && (curCallTile.tmemHashOrID != prevCallTile.tmemHashOrID)) {
+                             continue;
+                         }
+@@ -563,14 +643,11 @@ namespace RT64 {
+                 const uint32_t textureGenMask = G_LIGHTING | G_TEXTURE_GEN;
+                 const bool curUsesTextureGen = (curCall.callDesc.geometryMode & textureGenMask) == textureGenMask;
+                 const bool prevUsesTextureGen = (prevCall.callDesc.geometryMode & textureGenMask) == textureGenMask;
+-                if (curUsesTextureGen && prevUsesTextureGen && (true && true)) { // TODO: Do look at matching condition.
+-                    // FIXME: We assume the same look at is used throughout the entire draw call, so we only check the first vertex.
++                if (curUsesTextureGen && prevUsesTextureGen) {
+                     const uint32_t curVertexIndex = curWorkload.drawData.faceIndices[curCall.meshDesc.faceIndicesStart];
+                     const uint32_t prevVertexIndex = prevWorkload.drawData.faceIndices[prevCall.meshDesc.faceIndicesStart];
+                     const uint32_t curLookAtIndex = curWorkload.drawData.lookAtIndices[curVertexIndex] >> RSP_LOOKAT_INDEX_SHIFT;
+                     const uint32_t prevLookAtIndex = prevWorkload.drawData.lookAtIndices[prevVertexIndex] >> RSP_LOOKAT_INDEX_SHIFT;
+-
+-                    // A game that never loads a look at has no look at entries, but the indices still read 0.
+                     if ((curLookAtIndex < curWorkload.drawData.rspLookAt.size()) && (prevLookAtIndex < prevWorkload.drawData.rspLookAt.size())) {
+                         lookAtCheckSet.emplace(curLookAtIndex, prevLookAtIndex);
+                     }
+@@ -578,25 +655,147 @@ namespace RT64 {
+             }
+         }
+ 
+-        // Compute all the differences between transforms and insert them into a vector that will be sorted according to the differences.
+-        thread_local std::vector<MatchCandidate> matchCandidates;
+-        matchCandidates.clear();
+-
+-        const RigidBody *prevRigidBody;
++        const auto &curTransforms = firstCurWorkload.drawData.worldTransforms;
++        const auto &prevTransforms = firstPrevWorkload.drawData.worldTransforms;
+         const hlslpp::float4x4 &firstCurViewProj = firstCurWorkload.drawData.viewProjTransforms[firstCurProj.transformsIndex];
+         const hlslpp::float4x4 &firstPrevViewProj = firstPrevWorkload.drawData.viewProjTransforms[firstPrevProj.transformsIndex];
+-        for (const IndexPair &indices : transformCheckSet) {
+-            const hlslpp::float4x4 &curTransform = firstCurWorkload.drawData.worldTransforms[indices.first];
+-            const hlslpp::float4x4 &prevTransform = firstPrevWorkload.drawData.worldTransforms[indices.second];
+-            prevRigidBody = (firstPrevWorkloadMap != nullptr) ? &firstPrevWorkloadMap->transforms[indices.second].rigidBody : nullptr;
++        const hlslpp::float4x4 &firstCurView = firstCurWorkload.drawData.viewTransforms[firstCurProj.transformsIndex];
++        const hlslpp::float4x4 &firstPrevView = firstPrevWorkload.drawData.viewTransforms[firstPrevProj.transformsIndex];
 +        auto sameOrientation = [](const hlslpp::float4x4 &a, const hlslpp::float4x4 &b) {
 +            const float d = float(hlslpp::length(a[0].xyz - b[0].xyz) + hlslpp::length(a[1].xyz - b[1].xyz) + hlslpp::length(a[2].xyz - b[2].xyz));
 +            return d < 1e-3f;
 +        };
+ 
+-            TransformMatchResult matchResult = computeTransformMatch(curTransform, firstCurViewProj, prevTransform, firstPrevViewProj, prevRigidBody);
+-            if (matchResult.valid) {
+-                matchCandidates.emplace_back(indices.first, indices.second, matchResult.computeDifference());
++        // World matrices hold positions relative to the camera, so everything that stays put in the world shifts by the
++        // same amount between frames (the camera's movement). Find that shift as the most common one among the draws of
++        // each kind paired in order; the scenery and track then pair directly by where they were.
++        const float ShiftBinSize = 0.25f;
++        auto binKey = [&](const hlslpp::float3 &v) {
++            const int64_t x = std::lround(float(v.x) / ShiftBinSize) & 0x1FFFFF;
++            const int64_t y = std::lround(float(v.y) / ShiftBinSize) & 0x1FFFFF;
++            const int64_t z = std::lround(float(v.z) / ShiftBinSize) & 0x1FFFFF;
++            return (x << 42) | (y << 21) | z;
++        };
 +
++        thread_local std::unordered_map<int64_t, uint32_t> shiftBins;
++        shiftBins.clear();
 +        hlslpp::float3 staticShift = hlslpp::float3(0.0f, 0.0f, 0.0f);
 +        uint32_t staticCount = 0;
-+        for (const IndexPair &indices : transformCheckSet) {
-+            const hlslpp::float4x4 &curTransform = firstCurWorkload.drawData.worldTransforms[indices.first];
-+            const hlslpp::float4x4 &prevTransform = firstPrevWorkload.drawData.worldTransforms[indices.second];
-+            if (!sameOrientation(curTransform, prevTransform)) {
++        for (uint64_t kind : kindOrder) {
++            auto prevKindIt = prevKindMatrices.find(kind);
++            if (prevKindIt == prevKindMatrices.end()) {
 +                continue;
 +            }
 +
-+            const hlslpp::float3 shift = curTransform[3].xyz - prevTransform[3].xyz;
-+            const uint32_t count = ++shiftBins[shiftKey(shift)];
-+            if (count > staticCount) {
-+                staticCount = count;
-+                staticShift = shift;
++            const std::vector<uint32_t> &curList = curKindMatrices[kind];
++            const std::vector<uint32_t> &prevList = prevKindIt->second;
++            const size_t count = std::min(curList.size(), prevList.size());
++            for (size_t k = 0; k < count; k++) {
++                const hlslpp::float4x4 &curTransform = curTransforms[curList[k]];
++                const hlslpp::float4x4 &prevTransform = prevTransforms[prevList[k]];
++                if (!sameOrientation(curTransform, prevTransform)) {
++                    continue;
++                }
++
++                const hlslpp::float3 shift = curTransform[3].xyz - prevTransform[3].xyz;
++                const uint32_t binCount = ++shiftBins[binKey(shift)];
++                if (binCount > staticCount) {
++                    staticCount = binCount;
++                    staticShift = shift;
++                }
+             }
+         }
+ 
+         ModifiedBuffers modifiedBuffers;
++        thread_local std::unordered_multimap<int64_t, uint32_t> prevByPlace;
++        thread_local std::vector<uint32_t> curLeft;
++        thread_local std::vector<uint32_t> prevLeft;
++        thread_local std::vector<MatchCandidate> matchCandidates;
++        matchCandidates.clear();
++        auto addCandidate = [&](uint32_t curIndex, uint32_t prevIndex) {
++            const hlslpp::float4x4 &curTransform = curTransforms[curIndex];
++            const hlslpp::float4x4 &prevTransform = prevTransforms[prevIndex];
++            const RigidBody *prevRigidBody = (firstPrevWorkloadMap != nullptr) ? &firstPrevWorkloadMap->transforms[prevIndex].rigidBody : nullptr;
++            TransformMatchResult matchResult = computeTransformMatch(curTransform, firstCurViewProj, prevTransform, firstPrevViewProj, prevRigidBody);
++            if (!matchResult.valid) {
++                return;
++            }
++
++            // The chase camera follows the cars, which move further between frames than their parts are apart, so compare
++            // positions relative to the camera: a part keeps its place there.
++            const hlslpp::float4 curViewPos = hlslpp::mul(curTransform[3], firstCurView);
++            const hlslpp::float4 prevViewPos = hlslpp::mul(prevTransform[3], firstPrevView);
++            matchResult.positionDifference = float(hlslpp::length(curViewPos.xyz - prevViewPos.xyz));
++            matchResult.screenSpaceDifference = FLT_MAX;
++            matchCandidates.emplace_back(curIndex, prevIndex, matchResult.computeDifference());
++        };
++
++        for (uint64_t kind : kindOrder) {
++            auto prevKindIt = prevKindMatrices.find(kind);
++            if (prevKindIt == prevKindMatrices.end()) {
++                continue;
++            }
++
++            const std::vector<uint32_t> &curList = curKindMatrices[kind];
++            const std::vector<uint32_t> &prevList = prevKindIt->second;
++
++            // Static pieces: look up where each one was.
++            if (staticCount >= 3) {
++                prevByPlace.clear();
++                for (uint32_t prevIndex : prevList) {
++                    const hlslpp::float4x4 &prevTransform = prevTransforms[prevIndex];
++                    prevByPlace.emplace(binKey(prevTransform[3].xyz), prevIndex);
++                }
++
++                for (uint32_t curIndex : curList) {
++                    const hlslpp::float4x4 &curTransform = curTransforms[curIndex];
++                    auto range = prevByPlace.equal_range(binKey(curTransform[3].xyz - staticShift));
++                    for (auto it = range.first; it != range.second; it++) {
++                        const hlslpp::float4x4 &prevTransform = prevTransforms[it->second];
++                        if (firstCurWorkloadMap.prevTransformsMapped[it->second] || !sameOrientation(curTransform, prevTransform)) {
++                            continue;
++                        }
++
++                        if (float(hlslpp::length(curTransform[3].xyz - prevTransform[3].xyz - staticShift)) < 0.1f) {
++                            matchTransform(firstCurWorkload, firstPrevWorkload, firstCurWorkloadMap, firstPrevWorkloadMap, curIndex, it->second, modifiedBuffers);
++                            break;
++                        }
++                    }
++                }
++            }
++
++            // Moving objects: score the pairs left (or pair them in order where there are too many to compare).
++            curLeft.clear();
++            prevLeft.clear();
++            for (uint32_t curIndex : curList) {
++                if (!firstCurWorkloadMap.transforms[curIndex].mapped) {
++                    curLeft.emplace_back(curIndex);
++                }
++            }
++
++            for (uint32_t prevIndex : prevList) {
++                if (!firstCurWorkloadMap.prevTransformsMapped[prevIndex]) {
++                    prevLeft.emplace_back(prevIndex);
++                }
++            }
++
++            const size_t MaxPairsPerKind = 1024;
++            if ((curLeft.size() * prevLeft.size()) <= MaxPairsPerKind) {
++                for (uint32_t curIndex : curLeft) {
++                    for (uint32_t prevIndex : prevLeft) {
++                        addCandidate(curIndex, prevIndex);
++                    }
++                }
++            }
++            else {
++                const size_t count = std::min(curLeft.size(), prevLeft.size());
++                for (size_t k = 0; k < count; k++) {
++                    addCandidate(curLeft[k], prevLeft[k]);
++                }
 +            }
 +        }
 +
-+        const bool staticShiftKnown = (staticCount >= 3);
-         for (const IndexPair &indices : transformCheckSet) {
-             const hlslpp::float4x4 &curTransform = firstCurWorkload.drawData.worldTransforms[indices.first];
-             const hlslpp::float4x4 &prevTransform = firstPrevWorkload.drawData.worldTransforms[indices.second];
-             prevRigidBody = (firstPrevWorkloadMap != nullptr) ? &firstPrevWorkloadMap->transforms[indices.second].rigidBody : nullptr;
++        GTDiag::matchPairs += matchCandidates.size();
+         std::stable_sort(matchCandidates.begin(), matchCandidates.end());
+         for (const MatchCandidate candidate : matchCandidates) {
+             if (firstCurWorkloadMap.transforms[candidate.curIndex].mapped) {
+diff --git a/src/hle/rt64_present_queue.cpp b/src/hle/rt64_present_queue.cpp
+index 777263d..9ce0983 100644
+--- a/src/hle/rt64_present_queue.cpp
++++ b/src/hle/rt64_present_queue.cpp
+@@ -39,11 +39,13 @@ namespace RT64 {
+         int nextWriteCursor = (writeCursor + 1) % presents.size();
  
-             TransformMatchResult matchResult = computeTransformMatch(curTransform, firstCurViewProj, prevTransform, firstPrevViewProj, prevRigidBody);
-+            if (matchResult.valid) {
-+                // GT64: the chase camera follows the cars, which move further between frames than their parts are apart, so
-+                // compare positions relative to the camera: a part keeps its place there.
-+                // Anything that stayed put in the world (scenery, track) pairs with itself first.
-+                const float worldDifference = float(hlslpp::length(curTransform[3].xyz - prevTransform[3].xyz));
-+                const hlslpp::float4 curViewPos = hlslpp::mul(curTransform[3], firstCurView);
-+                const hlslpp::float4 prevViewPos = hlslpp::mul(prevTransform[3], firstPrevView);
-+                const bool unmoved = sameOrientation(curTransform, prevTransform) && ((worldDifference < 1e-3f) ||
-+                    (staticShiftKnown && (float(hlslpp::length(curTransform[3].xyz - prevTransform[3].xyz - staticShift)) < 0.1f)));
-+                matchResult.positionDifference = unmoved ? 0.0f : 1.0f + float(hlslpp::length(curViewPos.xyz - prevViewPos.xyz));
-+                matchResult.orientationDifference = unmoved ? 0.0f : matchResult.orientationDifference;
-+                matchResult.screenSpaceDifference = FLT_MAX;
-+            }
-             if (matchResult.valid) {
-                 matchCandidates.emplace_back(indices.first, indices.second, matchResult.computeDifference());
+         // Stall the thread until the barrier is lifted if we're trying to write on a present being used by the GPU.
++        const uint64_t stallStart = GTDiag::nowUs();
+         bool waitForBarrier;
+         do {
+             const std::scoped_lock lock(cursorMutex);
+             waitForBarrier = (nextWriteCursor == barrierCursor);
+         } while (waitForBarrier);
++        GTDiag::producerStallPresentUs += GTDiag::nowUs() - stallStart;
+ 
+         // Modify the cursor and notify anything waiting on the queue.
+         {
+@@ -272,9 +274,11 @@ namespace RT64 {
+                 // Stall until the interpolated color target is available.
+                 const uint32_t targetIndex = usingMSAA ? i : (i - 1);
+                 std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
++                const uint64_t framesStart = GTDiag::nowUs();
+                 ext.sharedResources->interpolatedCondition.wait(interpolatedLock, [&]() {
+                     return (frameCounters.available > targetIndex) || ((frameCounters.available == targetIndex) && frameCounters.skipped);
+                 });
++                GTDiag::presentWaitFramesUs += GTDiag::nowUs() - framesStart;
+ 
+                 // Do not present any more frames after this one after reaching the last available frame if the workload was skipped.
+                 if ((frameCounters.available == targetIndex) && frameCounters.skipped) {
+@@ -310,6 +314,7 @@ namespace RT64 {
              }
+ 
+             if (presentFrame) {
++                GTDiag::framesPresented++;
+                 swapChainValid = ext.swapChain->acquireTexture(acquiredSemaphore.get(), &swapChainIndex);
+             }
+ 
+@@ -514,7 +519,11 @@ namespace RT64 {
+                 skipPresent = skipPresent || ext.swapChain->isEmpty();
+ 
+                 Present &present = presents[processCursor];
++                const uint64_t waitStart = GTDiag::nowUs();
+                 ext.workloadQueue->waitForWorkloadId(present.workloadId);
++                GTDiag::presentWaitWorkloadUs += GTDiag::nowUs() - waitStart;
++                GTDiag::presents++;
++                if (skipPresent) GTDiag::presentsSkipped++;
+ 
+                 if (!presentThreadRunning) {
+                     continue;
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
 index a57257c..ebad6d9 100644
 --- a/src/hle/rt64_state.cpp
@@ -284,7 +562,7 @@ index 8ea27d5..7d2a177 100644
          struct {
              uint32_t testZIndexCount = 0;
 diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
-index 5a331aa..0762622 100644
+index 5a331aa..214b755 100644
 --- a/src/hle/rt64_workload_queue.cpp
 +++ b/src/hle/rt64_workload_queue.cpp
 @@ -42,6 +42,7 @@ namespace RT64 {
@@ -295,7 +573,21 @@ index 5a331aa..0762622 100644
          barrierCursor = int(workloads.size()) - 1;
          workloadId = 0;
          lastPresentId = 0;
-@@ -66,10 +67,20 @@ namespace RT64 {
+@@ -51,11 +52,13 @@ namespace RT64 {
+         int nextWriteCursor = (writeCursor + 1) % workloads.size();
+ 
+         // Stall the thread until the barrier is lifted if we're trying to write on a workload being used by the GPU.
++        const uint64_t stallStart = GTDiag::nowUs();
+         bool waitForBarrier;
+         do {
+             const std::scoped_lock lock(cursorMutex);
+             waitForBarrier = (nextWriteCursor == barrierCursor);
+         } while (waitForBarrier);
++        GTDiag::producerStallWorkloadUs += GTDiag::nowUs() - stallStart;
+ 
+         // Modify the cursor and notify anything waiting on the queue.
+         {
+@@ -66,10 +69,20 @@ namespace RT64 {
          cursorCondition.notify_all();
      }
  
@@ -316,7 +608,7 @@ index 5a331aa..0762622 100644
          }
  
          cursorCondition.notify_all();
-@@ -806,7 +817,7 @@ namespace RT64 {
+@@ -806,7 +819,7 @@ namespace RT64 {
                      }
  
                      // Do the resolve if using MSAA while target override is active and we're on the correct framebuffer pair index.
@@ -325,7 +617,7 @@ index 5a331aa..0762622 100644
                          overrideTarget->resize(ext.workloadGraphicsWorker, colorTarget->width, colorTarget->height);
                          overrideTarget->resolveFromTarget(ext.workloadGraphicsWorker, colorTarget, ext.shaderLibrary);
                      }
-@@ -892,18 +903,25 @@ namespace RT64 {
+@@ -892,19 +905,29 @@ namespace RT64 {
              {
                  std::unique_lock<std::mutex> cursorLock(cursorMutex);
                  cursorCondition.wait(cursorLock, [&]() {
@@ -350,10 +642,14 @@ index 5a331aa..0762622 100644
 -                Workload &workload = workloads[processCursor];
 +                // The frame's last workload stands for the group (present id, rate, pause state).
 +                Workload &workload = workloads[groupIndices.back()];
++                const uint64_t waitStart = GTDiag::nowUs();
                  ext.presentQueue->waitForPresentId(workload.presentId);
++                const uint64_t busyStart = GTDiag::nowUs();
++                GTDiag::renderWaitPresentUs += busyStart - waitStart;
  
                  if (!threadsRunning) {
-@@ -923,8 +941,7 @@ namespace RT64 {
+                     continue;
+@@ -923,8 +946,7 @@ namespace RT64 {
                  // TODO: The frame detection needs to be more elaborate than just matching one workload to one frame.
                  GameFrame &curFrame = gameFrames[curFrameIndex];
                  const GameFrame &prevFrame = gameFrames[prevFrameIndex];
@@ -363,7 +659,7 @@ index 5a331aa..0762622 100644
  
                  // Detect the color image to interpolate for this workload.
                  RenderTargetKey interpolationTargetKey;
-@@ -936,8 +953,9 @@ namespace RT64 {
+@@ -936,8 +958,9 @@ namespace RT64 {
                      std::unordered_set<uint32_t> &colorSet = ext.sharedResources->colorImageAddressSet;
                      colorVector.clear();
                      colorSet.clear();
@@ -375,7 +671,7 @@ index 5a331aa..0762622 100644
                          bool interpolationCandidate = fbPair.earlyPresentCandidate();
                          if (fbPair.drawColorRect.isEmpty()) {
                              continue;
-@@ -966,6 +984,7 @@ namespace RT64 {
+@@ -966,6 +989,7 @@ namespace RT64 {
                              interpolationTargetKey.siz = fbPair.colorImage.siz;
                              interpolationTargetKey.width = fbPair.colorImage.width;
                              interpolationTargetFbPairIndex = f;
@@ -383,7 +679,17 @@ index 5a331aa..0762622 100644
                          }
                      }
                  }
-@@ -1030,8 +1049,10 @@ namespace RT64 {
+@@ -981,7 +1005,9 @@ namespace RT64 {
+                 if (requiresFrameMatching) {
+                     matchingProfiler.reset();
+                     matchingProfiler.start();
++                    const uint64_t matchStart = GTDiag::nowUs();
+                     curFrame.match(ext.workloadGraphicsWorker, *this, prevFrame, ext.workloadVelocityUploader, velocityUploaderUsed, tileInterpolationUsed, lookAtInterpolationUsed);
++                    GTDiag::matchUs += GTDiag::nowUs() - matchStart;
+                     matchingProfiler.end();
+                     matchingProfiler.log();
+ 
+@@ -1030,10 +1056,14 @@ namespace RT64 {
                  // If the same set of counters is used, we wait until the presentation of its targets is finished so the targets are available to use. Waiting is ignored
                  // if the frame counter has never presented anything yet, as it'll only be a valid value if the previous present event actually did something.
                  else if (generateInterpolatedFrames) {
@@ -391,20 +697,31 @@ index 5a331aa..0762622 100644
 +                    // workloads (each waits on the other); give up after a few frames' time, at worst losing an in-between frame.
                      std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
 -                    ext.sharedResources->interpolatedCondition.wait(interpolatedLock, [&]() {
-+                    ext.sharedResources->interpolatedCondition.wait_for(interpolatedLock, std::chrono::milliseconds(100), [&]() {
++                    const uint64_t countersStart = GTDiag::nowUs();
++                    if (!ext.sharedResources->interpolatedCondition.wait_for(interpolatedLock, std::chrono::milliseconds(100), [&]() {
                          return (prevFrameCounters.presented == 0) || (prevFrameCounters.presented >= prevFrameCounters.available);
-                     });
+-                    });
++                    })) GTDiag::timeouts++;
++                    GTDiag::renderWaitCountersUs += GTDiag::nowUs() - countersStart;
                  }
-@@ -1092,7 +1113,7 @@ namespace RT64 {
+ 
+                 InterpolatedFrameCounters &curFrameCounters = ext.sharedResources->interpolatedFrames[ext.sharedResources->interpolatedFramesIndex];
+@@ -1092,10 +1122,12 @@ namespace RT64 {
                              if (useDifferentCounters && (prevFrameCounters.available > 0) && (targetIndex < prevFrameCounters.available)) {
                                  // Wait until the target has finished presenting if the alternate frame counter (used by the present queue) is making use of this target.
                                  std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
 -                                ext.sharedResources->interpolatedCondition.wait(interpolatedLock, [&]() {
-+                                ext.sharedResources->interpolatedCondition.wait_for(interpolatedLock, std::chrono::milliseconds(100), [&]() {
++                                const uint64_t targetStart = GTDiag::nowUs();
++                                if (!ext.sharedResources->interpolatedCondition.wait_for(interpolatedLock, std::chrono::milliseconds(100), [&]() {
                                      frameReduction = frameReduction || (prevFrameCounters.presented <= targetIndex);
                                      return prevFrameCounters.presented > targetIndex;
-                                 });
-@@ -1106,8 +1127,10 @@ namespace RT64 {
+-                                });
++                                })) GTDiag::timeouts++;
++                                GTDiag::renderWaitCountersUs += GTDiag::nowUs() - targetStart;
+                             }
+ 
+                             targetIndex++;
+@@ -1106,8 +1138,10 @@ namespace RT64 {
                          prevFrameWeight = 1.0f - curFrameWeight;
                      }
                      else {
@@ -417,7 +734,7 @@ index 5a331aa..0762622 100644
                      }
  
                      const bool uploadExtras = (frame == 0) && workloadConfig.raytracingEnabled;
-@@ -1132,7 +1155,7 @@ namespace RT64 {
+@@ -1132,7 +1166,7 @@ namespace RT64 {
                      if (generateInterpolatedFrames && (usingMSAA || (frame > 0))) {
                          {
                              std::scoped_lock<std::mutex> cursorLock(cursorMutex);
@@ -426,7 +743,23 @@ index 5a331aa..0762622 100644
                          }
  
                          {
-@@ -1165,7 +1188,9 @@ namespace RT64 {
+@@ -1152,6 +1186,15 @@ namespace RT64 {
+                     framesRendered++;
+                 }
+ 
++                GTDiag::groups++;
++                GTDiag::groupWorkloads += uint32_t(groupIndices.size());
++                GTDiag::framesRendered += framesRendered;
++                GTDiag::framesWanted += displayFrames;
++                GTDiag::rate = workload.viOriginalRate;
++                GTDiag::target = workloadConfig.targetRate;
++                GTDiag::renderBusyUs += GTDiag::nowUs() - busyStart;
++                GTDiag::report();
++
+                 // Set the skipped parameter on the frame counter if the workload wasn't skipped but some of its frames were.
+                 if (skippedFrames && !skipWorkloadNow) {
+                     {
+@@ -1165,7 +1208,9 @@ namespace RT64 {
                  threadConfigurationValidate();
  
                  if (!workload.paused) {
@@ -438,10 +771,53 @@ index 5a331aa..0762622 100644
  
                  processCursor = -1;
 diff --git a/src/hle/rt64_workload_queue.h b/src/hle/rt64_workload_queue.h
-index bde2f03..b621a90 100644
+index bde2f03..7417564 100644
 --- a/src/hle/rt64_workload_queue.h
 +++ b/src/hle/rt64_workload_queue.h
-@@ -23,7 +23,7 @@
+@@ -5,6 +5,42 @@
+ #pragma once
+ 
+ #include <array>
++#include <atomic>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++
++// GT64 diagnostics (TEMP): time each RT64 thread spends waiting on the others, reported once a second.
++namespace RT64::GTDiag {
++    inline std::atomic<uint64_t> renderWaitPresentUs{0}, renderWaitCountersUs{0}, presentWaitWorkloadUs{0}, presentWaitFramesUs{0},
++        producerStallWorkloadUs{0}, producerStallPresentUs{0}, renderBusyUs{0}, matchUs{0}, matchPairs{0};
++    inline std::atomic<uint32_t> groups{0}, groupWorkloads{0}, framesRendered{0}, framesWanted{0}, timeouts{0}, presents{0}, presentsSkipped{0},
++        framesPresented{0}, rate{0}, target{0};
++    inline uint64_t nowUs() { return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
++    inline bool enabled() {
++#ifdef _WIN32
++        return true;
++#else
++        static const bool on = std::getenv("GT_INTERP_LOG") != nullptr;
++        return on;
++#endif
++    }
++    inline void report() {
++        static uint64_t last = nowUs();
++        const uint64_t now = nowUs();
++        if (!enabled() || (now - last) < 1000000) return;
++        last = now;
++        fprintf(stderr, "[interp] rate %u target %u | groups %u (%u wl) frames %u/%u timeouts %u | presents %u (skipped %u) shown %u | ms waiting: render>present %llu render>counters %llu present>workload %llu present>frames %llu gfx>wlqueue %llu gfx>presentqueue %llu | render busy %llu\n",
++            rate.load(), target.load(), groups.exchange(0), groupWorkloads.exchange(0), framesRendered.exchange(0), framesWanted.exchange(0), timeouts.exchange(0),
++            presents.exchange(0), presentsSkipped.exchange(0), framesPresented.exchange(0),
++            (unsigned long long)renderWaitPresentUs.exchange(0) / 1000, (unsigned long long)renderWaitCountersUs.exchange(0) / 1000,
++            (unsigned long long)presentWaitWorkloadUs.exchange(0) / 1000, (unsigned long long)presentWaitFramesUs.exchange(0) / 1000,
++            (unsigned long long)producerStallWorkloadUs.exchange(0) / 1000, (unsigned long long)producerStallPresentUs.exchange(0) / 1000,
++            (unsigned long long)renderBusyUs.exchange(0) / 1000);
++        fprintf(stderr, "[interp] match %llu ms, %llu transform pairs\n", (unsigned long long)matchUs.exchange(0) / 1000, (unsigned long long)matchPairs.exchange(0));
++        fflush(stderr);
++    }
++}
+ 
+ #include "common/rt64_enhancement_configuration.h"
+ #include "common/rt64_profiling_timer.h"
+@@ -23,7 +59,7 @@
  #   include "render/rt64_raytracing_shader_cache.h"
  #endif
  
@@ -450,7 +826,7 @@ index bde2f03..b621a90 100644
  
  namespace RT64 {
      struct PresentQueue;
-@@ -64,6 +64,7 @@ namespace RT64 {
+@@ -64,6 +100,7 @@ namespace RT64 {
          std::array<Workload, WORKLOAD_QUEUE_SIZE> workloads;
          int threadCursor;
          int writeCursor;
@@ -458,7 +834,7 @@ index bde2f03..b621a90 100644
          int barrierCursor;
          std::mutex cursorMutex;
          std::condition_variable cursorCondition;
-@@ -98,6 +99,8 @@ namespace RT64 {
+@@ -98,6 +135,8 @@ namespace RT64 {
          ProfilingTimer matchingProfiler = ProfilingTimer(120);
          ProfilingTimer workloadProfiler = ProfilingTimer(120);
          std::array<GameFrame, 2> gameFrames;
@@ -467,7 +843,7 @@ index bde2f03..b621a90 100644
          uint32_t prevFrameIndex = uint32_t(gameFrames.size()) - 1;
          uint32_t curFrameIndex = 0;
  
-@@ -105,6 +108,7 @@ namespace RT64 {
+@@ -105,6 +144,7 @@ namespace RT64 {
          ~WorkloadQueue();
          void reset();
          void advanceToNextWorkload();
