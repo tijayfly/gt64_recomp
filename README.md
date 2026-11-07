@@ -195,8 +195,8 @@ toward the previous one (tests the frame matching headless, where the refresh ra
 (camera cuts left uninterpolated), `GT_INTERP_LOG` (once a second: frames matched and interpolated, matching time and
 how long RT64's threads waited on each other).
 
-On Windows the game's output goes to `GT64Recompiled.log` beside the exe, and a crash adds the exception and its
-location in the exe there.
+On Windows the game's output goes to `GT64Recompiled.log` beside the exe. A crash adds the exception, the crashing
+thread and its call chain (module + offset, unwound from the exception) there, and writes `GT64Recompiled.dmp`.
 
 </details>
 

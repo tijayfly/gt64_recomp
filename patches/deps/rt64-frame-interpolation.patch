@@ -374,56 +374,6 @@ index 60f45f6..d2311a5 100644
          std::stable_sort(matchCandidates.begin(), matchCandidates.end());
          for (const MatchCandidate candidate : matchCandidates) {
              if (firstCurWorkloadMap.transforms[candidate.curIndex].mapped) {
-diff --git a/src/hle/rt64_present_queue.cpp b/src/hle/rt64_present_queue.cpp
-index 777263d..9ce0983 100644
---- a/src/hle/rt64_present_queue.cpp
-+++ b/src/hle/rt64_present_queue.cpp
-@@ -39,11 +39,13 @@ namespace RT64 {
-         int nextWriteCursor = (writeCursor + 1) % presents.size();
- 
-         // Stall the thread until the barrier is lifted if we're trying to write on a present being used by the GPU.
-+        const uint64_t stallStart = GTDiag::nowUs();
-         bool waitForBarrier;
-         do {
-             const std::scoped_lock lock(cursorMutex);
-             waitForBarrier = (nextWriteCursor == barrierCursor);
-         } while (waitForBarrier);
-+        GTDiag::producerStallPresentUs += GTDiag::nowUs() - stallStart;
- 
-         // Modify the cursor and notify anything waiting on the queue.
-         {
-@@ -272,9 +274,11 @@ namespace RT64 {
-                 // Stall until the interpolated color target is available.
-                 const uint32_t targetIndex = usingMSAA ? i : (i - 1);
-                 std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
-+                const uint64_t framesStart = GTDiag::nowUs();
-                 ext.sharedResources->interpolatedCondition.wait(interpolatedLock, [&]() {
-                     return (frameCounters.available > targetIndex) || ((frameCounters.available == targetIndex) && frameCounters.skipped);
-                 });
-+                GTDiag::presentWaitFramesUs += GTDiag::nowUs() - framesStart;
- 
-                 // Do not present any more frames after this one after reaching the last available frame if the workload was skipped.
-                 if ((frameCounters.available == targetIndex) && frameCounters.skipped) {
-@@ -310,6 +314,7 @@ namespace RT64 {
-             }
- 
-             if (presentFrame) {
-+                GTDiag::framesPresented++;
-                 swapChainValid = ext.swapChain->acquireTexture(acquiredSemaphore.get(), &swapChainIndex);
-             }
- 
-@@ -514,7 +519,11 @@ namespace RT64 {
-                 skipPresent = skipPresent || ext.swapChain->isEmpty();
- 
-                 Present &present = presents[processCursor];
-+                const uint64_t waitStart = GTDiag::nowUs();
-                 ext.workloadQueue->waitForWorkloadId(present.workloadId);
-+                GTDiag::presentWaitWorkloadUs += GTDiag::nowUs() - waitStart;
-+                GTDiag::presents++;
-+                if (skipPresent) GTDiag::presentsSkipped++;
- 
-                 if (!presentThreadRunning) {
-                     continue;
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
 index a57257c..47b513d 100644
 --- a/src/hle/rt64_state.cpp
@@ -818,10 +768,10 @@ index 5a331aa..b140c1c 100644
  
                  processCursor = -1;
 diff --git a/src/hle/rt64_workload_queue.h b/src/hle/rt64_workload_queue.h
-index bde2f03..6cf7cca 100644
+index bde2f03..bc2015b 100644
 --- a/src/hle/rt64_workload_queue.h
 +++ b/src/hle/rt64_workload_queue.h
-@@ -5,6 +5,39 @@
+@@ -5,6 +5,34 @@
  #pragma once
  
  #include <array>
@@ -833,10 +783,8 @@ index bde2f03..6cf7cca 100644
 +// GT64 diagnostics (GT_INTERP_LOG): time each RT64 thread spends waiting on the others and on frame matching, reported
 +// once a second.
 +namespace RT64::GTDiag {
-+    inline std::atomic<uint64_t> renderWaitPresentUs{0}, renderWaitCountersUs{0}, presentWaitWorkloadUs{0}, presentWaitFramesUs{0},
-+        producerStallWorkloadUs{0}, producerStallPresentUs{0}, renderBusyUs{0}, matchUs{0}, matchPairs{0};
-+    inline std::atomic<uint32_t> groups{0}, groupWorkloads{0}, framesRendered{0}, framesWanted{0}, timeouts{0}, presents{0}, presentsSkipped{0},
-+        framesPresented{0}, rate{0}, target{0};
++    inline std::atomic<uint64_t> renderWaitPresentUs{0}, renderWaitCountersUs{0}, producerStallWorkloadUs{0}, renderBusyUs{0}, matchUs{0}, matchPairs{0};
++    inline std::atomic<uint32_t> groups{0}, groupWorkloads{0}, framesRendered{0}, framesWanted{0}, timeouts{0}, rate{0}, target{0};
 +    inline uint64_t nowUs() { return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
 +    inline bool enabled() {
 +        static const bool on = std::getenv("GT_INTERP_LOG") != nullptr;
@@ -847,21 +795,18 @@ index bde2f03..6cf7cca 100644
 +        const uint64_t now = nowUs();
 +        if (!enabled() || (now - last) < 1000000) return;
 +        last = now;
-+        fprintf(stderr, "[interp] rate %u target %u | groups %u (%u wl) frames %u/%u timeouts %u | presents %u (skipped %u) shown %u | ms waiting: render>present %llu render>counters %llu present>workload %llu present>frames %llu gfx>wlqueue %llu gfx>presentqueue %llu | render busy %llu\n",
++        fprintf(stderr, "[interp] rate %u target %u | groups %u (%u wl) frames %u/%u timeouts %u | ms: render waiting for present %llu, for counters %llu, busy %llu (matching %llu, %llu pairs) | gfx thread waiting for workload queue %llu\n",
 +            rate.load(), target.load(), groups.exchange(0), groupWorkloads.exchange(0), framesRendered.exchange(0), framesWanted.exchange(0), timeouts.exchange(0),
-+            presents.exchange(0), presentsSkipped.exchange(0), framesPresented.exchange(0),
 +            (unsigned long long)renderWaitPresentUs.exchange(0) / 1000, (unsigned long long)renderWaitCountersUs.exchange(0) / 1000,
-+            (unsigned long long)presentWaitWorkloadUs.exchange(0) / 1000, (unsigned long long)presentWaitFramesUs.exchange(0) / 1000,
-+            (unsigned long long)producerStallWorkloadUs.exchange(0) / 1000, (unsigned long long)producerStallPresentUs.exchange(0) / 1000,
-+            (unsigned long long)renderBusyUs.exchange(0) / 1000);
-+        fprintf(stderr, "[interp] match %llu ms, %llu transform pairs\n", (unsigned long long)matchUs.exchange(0) / 1000, (unsigned long long)matchPairs.exchange(0));
++            (unsigned long long)renderBusyUs.exchange(0) / 1000, (unsigned long long)matchUs.exchange(0) / 1000, (unsigned long long)matchPairs.exchange(0),
++            (unsigned long long)producerStallWorkloadUs.exchange(0) / 1000);
 +        fflush(stderr);
 +    }
 +}
  
  #include "common/rt64_enhancement_configuration.h"
  #include "common/rt64_profiling_timer.h"
-@@ -23,7 +56,7 @@
+@@ -23,7 +51,7 @@
  #   include "render/rt64_raytracing_shader_cache.h"
  #endif
  
@@ -870,7 +815,7 @@ index bde2f03..6cf7cca 100644
  
  namespace RT64 {
      struct PresentQueue;
-@@ -64,6 +97,7 @@ namespace RT64 {
+@@ -64,6 +92,7 @@ namespace RT64 {
          std::array<Workload, WORKLOAD_QUEUE_SIZE> workloads;
          int threadCursor;
          int writeCursor;
@@ -878,7 +823,7 @@ index bde2f03..6cf7cca 100644
          int barrierCursor;
          std::mutex cursorMutex;
          std::condition_variable cursorCondition;
-@@ -98,6 +132,8 @@ namespace RT64 {
+@@ -98,6 +127,8 @@ namespace RT64 {
          ProfilingTimer matchingProfiler = ProfilingTimer(120);
          ProfilingTimer workloadProfiler = ProfilingTimer(120);
          std::array<GameFrame, 2> gameFrames;
@@ -887,7 +832,7 @@ index bde2f03..6cf7cca 100644
          uint32_t prevFrameIndex = uint32_t(gameFrames.size()) - 1;
          uint32_t curFrameIndex = 0;
  
-@@ -105,6 +141,7 @@ namespace RT64 {
+@@ -105,6 +136,7 @@ namespace RT64 {
          ~WorkloadQueue();
          void reset();
          void advanceToNextWorkload();

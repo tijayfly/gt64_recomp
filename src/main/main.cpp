@@ -94,17 +94,66 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS* info) {
         fprintf(stderr, "  %s address %p\n", info->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
             reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]));
     }
-    // Return addresses on the stack that fall inside the exe: a rough backtrace.
-    const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
-    MODULEINFO mi{};
-    if (K32GetModuleInformation(GetCurrentProcess(), GetModuleHandleA(nullptr), &mi, sizeof(mi))) {
-        const uintptr_t* sp = reinterpret_cast<const uintptr_t*>(info->ContextRecord->Rsp);
-        int found = 0;
-        for (int i = 0; i < 4096 && found < 24; i++) {
-            const uintptr_t v = sp[i];
-            if (v >= base && v < base + mi.SizeOfImage) {
-                fprintf(stderr, "  stack: exe + 0x%llx\n", (unsigned long long)(v - base));
-                found++;
+    // The crashing thread and its call chain, unwound from the exception context with each module's unwind tables.
+    {
+        typedef HRESULT (WINAPI *GetThreadDescriptionFn)(HANDLE, PWSTR*);
+        auto get_description = reinterpret_cast<GetThreadDescriptionFn>(GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription"));
+        PWSTR description = nullptr;
+        if (get_description != nullptr && SUCCEEDED(get_description(GetCurrentThread(), &description)) && description != nullptr) {
+            fprintf(stderr, "  thread %lu \"%ls\"\n", GetCurrentThreadId(), description);
+            LocalFree(description);
+        }
+        else {
+            fprintf(stderr, "  thread %lu\n", GetCurrentThreadId());
+        }
+    }
+
+    CONTEXT context = *info->ContextRecord;
+    for (int frame = 0; frame < 48 && context.Rip != 0; frame++) {
+        const DWORD64 pc = context.Rip;
+        HMODULE frame_module = nullptr;
+        char frame_module_name[MAX_PATH] = "?";
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(pc), &frame_module) && frame_module != nullptr) {
+            GetModuleFileNameA(frame_module, frame_module_name, MAX_PATH);
+        }
+        const char* short_name = strrchr(frame_module_name, '\\');
+        short_name = (short_name != nullptr) ? short_name + 1 : frame_module_name;
+        fprintf(stderr, "  #%02d %s + 0x%llx\n", frame, short_name,
+            (unsigned long long)(pc - reinterpret_cast<DWORD64>(frame_module)));
+
+        DWORD64 image_base = 0;
+        PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(pc, &image_base, nullptr);
+        if (function == nullptr) {
+            // A leaf function: the return address is on top of the stack.
+            context.Rip = *reinterpret_cast<const DWORD64*>(context.Rsp);
+            context.Rsp += 8;
+        }
+        else {
+            PVOID handler_data = nullptr;
+            DWORD64 establisher_frame = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, pc, function, &context, &handler_data, &establisher_frame, nullptr);
+        }
+    }
+
+    // A minidump beside the log, for a closer look.
+    {
+        typedef BOOL (WINAPI *MiniDumpWriteDumpFn)(HANDLE, DWORD, HANDLE, DWORD, const void*, const void*, const void*);
+        HMODULE dbghelp = LoadLibraryA("dbghelp.dll");
+        auto write_dump = dbghelp ? reinterpret_cast<MiniDumpWriteDumpFn>(GetProcAddress(dbghelp, "MiniDumpWriteDump")) : nullptr;
+        char exe_path[MAX_PATH];
+        const DWORD length = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+        if (write_dump != nullptr && length > 0 && length < MAX_PATH) {
+            std::string dump_path(exe_path, length);
+            dump_path = dump_path.substr(0, dump_path.find_last_of("\\/") + 1) + "GT64Recompiled.dmp";
+            HANDLE file = CreateFileA(dump_path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file != INVALID_HANDLE_VALUE) {
+                struct { DWORD ThreadId; EXCEPTION_POINTERS* ExceptionPointers; BOOL ClientPointers; } exception_info{ GetCurrentThreadId(), info, FALSE };
+                const DWORD MiniDumpWithDataSegsAndThreadInfo = 0x00000001 | 0x00001000;
+                if (write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpWithDataSegsAndThreadInfo, &exception_info, nullptr, nullptr)) {
+                    fprintf(stderr, "  minidump written to %s\n", dump_path.c_str());
+                }
+                CloseHandle(file);
             }
         }
     }

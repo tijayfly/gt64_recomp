@@ -33,17 +33,69 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     set(NFD_PORTAL ON CACHE BOOL "nfd: use xdg-desktop-portal instead of GTK" FORCE)
 endif()
 
-# Local fixes to pinned dependencies (patches/deps/<dir>-*.patch, applied once; already-applied patches are skipped).
+# Local fixes to pinned dependencies (patches/deps/<dir>-*.patch). apply_dependency_patch() lists a patch for its repo;
+# apply_dependency_patches() then applies each repo's patches in order, as one set. Several patches touch the same
+# lines, so they can't be checked one at a time: the set applied is recorded (patches/.applied/<repo>/, with a hash of
+# the patches), and when any of them changes, the recorded set is undone in reverse order and the new set applied.
 function(apply_dependency_patch repo_dir patch_file)
-    execute_process(COMMAND git apply --reverse --check ${patch_file}
-        WORKING_DIRECTORY ${repo_dir} RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
-    if (NOT already_applied EQUAL 0)
-        execute_process(COMMAND git apply ${patch_file} WORKING_DIRECTORY ${repo_dir} RESULT_VARIABLE apply_result)
-        if (NOT apply_result EQUAL 0)
-            message(FATAL_ERROR "Failed to apply ${patch_file} in ${repo_dir}")
-        endif()
-        message(STATUS "Applied ${patch_file}")
+    get_property(repos GLOBAL PROPERTY gt64_patch_repos)
+    if (NOT repo_dir IN_LIST repos)
+        set_property(GLOBAL APPEND PROPERTY gt64_patch_repos ${repo_dir})
     endif()
+    string(MAKE_C_IDENTIFIER "${repo_dir}" repo_id)
+    set_property(GLOBAL APPEND PROPERTY gt64_patches_${repo_id} ${patch_file})
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${patch_file})
+endfunction()
+
+function(apply_dependency_patches)
+    get_property(repos GLOBAL PROPERTY gt64_patch_repos)
+    foreach(repo_dir ${repos})
+        string(MAKE_C_IDENTIFIER "${repo_dir}" repo_id)
+        get_property(patches GLOBAL PROPERTY gt64_patches_${repo_id})
+        file(RELATIVE_PATH repo_name ${CMAKE_SOURCE_DIR} ${repo_dir})
+        string(MAKE_C_IDENTIFIER "${repo_name}" repo_name)
+        set(state_dir ${CMAKE_SOURCE_DIR}/patches/.applied/${repo_name})
+        set(hashes "")
+        foreach(patch ${patches})
+            file(SHA256 ${patch} patch_hash)
+            string(APPEND hashes "${patch_hash}")
+        endforeach()
+        string(SHA256 set_hash "${hashes}")
+        set(stamp "")
+        if (EXISTS ${state_dir}/stamp)
+            file(READ ${state_dir}/stamp stamp)
+        endif()
+        if (stamp STREQUAL set_hash)
+            continue()
+        endif()
+
+        # Undo the set applied before.
+        file(GLOB applied ${state_dir}/*.patch)
+        list(SORT applied)
+        list(REVERSE applied)
+        foreach(patch ${applied})
+            execute_process(COMMAND git apply --reverse ${patch} WORKING_DIRECTORY ${repo_dir} RESULT_VARIABLE result)
+            if (NOT result EQUAL 0)
+                message(FATAL_ERROR "Failed to undo ${patch} in ${repo_dir}")
+            endif()
+        endforeach()
+
+        file(REMOVE_RECURSE ${state_dir})
+        file(MAKE_DIRECTORY ${state_dir})
+        set(index 10)
+        foreach(patch ${patches})
+            execute_process(COMMAND git apply ${patch} WORKING_DIRECTORY ${repo_dir} RESULT_VARIABLE result)
+            if (NOT result EQUAL 0)
+                message(FATAL_ERROR "Failed to apply ${patch} in ${repo_dir} (it must apply on top of the patches before it)")
+            endif()
+            get_filename_component(patch_name ${patch} NAME)
+            configure_file(${patch} ${state_dir}/${index}-${patch_name} COPYONLY)
+            math(EXPR index "${index} + 1")
+        endforeach()
+        file(WRITE ${state_dir}/stamp "${set_hash}")
+        list(LENGTH patches patch_count)
+        message(STATUS "Applied ${patch_count} patch(es) to ${repo_name}")
+    endforeach()
 endfunction()
 
 # Vsync (FIFO) presentation blocks indefinitely while the window is hidden on some drivers (NVIDIA + Wayland), which
@@ -86,6 +138,8 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # on both sides, at most an N64 pixel wide) with the colour around them, as the N64's VI coverage filtering does.
 # At high resolutions the sky showed through seams in the track geometry.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-crack-fill.patch)
+# Screen positions snapped to the RSP's quarter-pixel grid, so polygon edges that differ by a hair meet again.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-snap-vertices.patch)
 # Draw distance: the race camera's far plane moved out with its fog kept in place, and the track sections' LOD branches
 # (G_BRANCH_Z) always taken.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-draw-distance.patch)
@@ -94,6 +148,8 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # and interpolated together; scenes are matched within their own task; transforms are matched by position relative to the
 # camera (the chase camera's cars move further between frames than their parts are apart); camera cuts aren't interpolated.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-frame-interpolation.patch)
+
+apply_dependency_patches()
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 
