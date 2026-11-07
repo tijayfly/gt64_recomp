@@ -61,8 +61,7 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   inspired by [RobotBox for Assetto Corsa](https://github.com/tijayfly/robotbox). It gave faster lap times in testing.
   *Original* (the default) keeps the game's original shift logic.
 - **Slip rumble.** General > Slip Rumble (on by default): the controller rumbles while your wheels spin or the car
-  slides, stronger the more it slips, up to the feel of the game's cobbled-street rumble. The game's own rumble is
-  unchanged.
+  slides, stronger the more it slips. The game's own rumble is unchanged.
 - **Draw distance.** Graphics > Draw Distance, three levels:
   - *Maximum* (default): the whole track, every car, shadow and piece of trackside scenery, at any distance. Split
     screen (the intro) uses *Extended*, as the whole track for each view is too slow.
