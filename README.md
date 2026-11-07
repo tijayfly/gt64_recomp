@@ -69,7 +69,6 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   view cone sized for 4:3.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
 - **Any resolution.** RT64 renders at the window's resolution.
-- **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
 - **Uncapped framerate.** Graphics > Refresh Rate: *Display* runs races at the display's refresh rate (60, 120, 144 Hz
   and up), *Manual* at a rate you set, *Original* at the game's 30 FPS. The extra frames are drawn between the game's
   own, so the game itself, its physics and replay playback keep their original timing. Replays and the intro stay
