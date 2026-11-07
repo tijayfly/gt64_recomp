@@ -4,7 +4,7 @@
 
 **GT 64: Championship Edition (N64, 1998), as a native PC program.**
 
-Gamepad support · any resolution · uncapped framerate · widescreen races · full-frame 4:3 screens · extended draw distance
+Gamepad support · any resolution · uncapped framerate · widescreen races · extended draw distance
 
 </div>
 
