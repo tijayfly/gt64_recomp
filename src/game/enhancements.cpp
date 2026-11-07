@@ -833,7 +833,7 @@ extern "C" void gt_save_request(uint8_t* rdram, uint32_t request) {
 }
 
 
-// Automatic gearbox (General > Automatic Gearbox).
+// Automatic gearbox (General > Automatic Gearbox: Original or RobotBox, the Custom setting).
 // Each car's gearbox runs in func_8003412C: with an automatic transmission it calls func_800338B4, which takes the car
 // out of neutral, handles reverse, and shifts up when the engine speed (double at car +0x100) reaches the car's upshift
 // point and down (from 2nd or higher, with a pedal pressed) when it falls to its downshift point. The points are a
