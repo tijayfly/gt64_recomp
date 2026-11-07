@@ -17,6 +17,9 @@ namespace gt {
     uint8_t* game_rdram();
     // Every VI: pillarbox the 4:3 boot logos in widescreen (src/game/enhancements.cpp).
     void widescreen_on_vi();
+    // Rumble: the game's motor state, combined with slip rumble (src/game/enhancements.cpp); slip rumble's timeout every VI.
+    void rumble_set_game(int controller, bool on);
+    void rumble_on_vi();
 }
 
 #endif

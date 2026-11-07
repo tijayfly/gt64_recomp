@@ -75,6 +75,23 @@ static void add_general_options(recomp::config::Config &config) {
         auto_gearbox_options,
         gt::AutoGearbox::Original
     );
+
+    static EnumOptionVector slip_rumble_options = {
+        {gt::SlipRumble::Off, "Off", "Off"},
+        {gt::SlipRumble::On, "On", "On"},
+    };
+    config.add_enum_option(
+        gt::configkeys::general::slip_rumble,
+        "Slip Rumble",
+        "<recomp-color primary>On</recomp-color> adds rumble while your wheels spin or the car slides, stronger the "
+        "more it slips. <recomp-color primary>Off</recomp-color> keeps the game's original rumble.",
+        slip_rumble_options,
+        gt::SlipRumble::On
+    );
+}
+
+gt::SlipRumble gt::get_slip_rumble() {
+    return static_cast<gt::SlipRumble>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::slip_rumble)));
 }
 
 gt::AutoGearbox gt::get_auto_gearbox() {

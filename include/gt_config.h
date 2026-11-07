@@ -12,6 +12,7 @@ namespace gt {
         namespace general {
             inline const std::string analog_triggers = "analog_triggers";
             inline const std::string auto_gearbox = "auto_gearbox";
+            inline const std::string slip_rumble = "slip_rumble";
         }
     }
 
@@ -36,10 +37,16 @@ namespace gt {
         Custom,   // up at 90% of the 10000 RPM rev limit, down at 55% (never into neutral or reverse)
     };
 
+    enum class SlipRumble {
+        Off,
+        On, // rumble while the car's wheels spin or it slides, harder the more it slips
+    };
+
     void init_config();
     FrameRate get_frame_rate();
     AnalogTriggers get_analog_triggers();
     AutoGearbox get_auto_gearbox();
+    SlipRumble get_slip_rumble();
     DrawDistance get_draw_distance();
 }
 

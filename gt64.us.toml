@@ -129,6 +129,12 @@ func = "func_80043990"
 before_vram = 0x80043A9C
 text = "{ void gt_rumble_log(int); gt_rumble_log(0); }"
 
+# Slip rumble: each frame's wheel contact for a car (func_80039AA4, a0 = the car) drives the rumble for its controller.
+[[patches.hook]]
+func = "func_80039AA4"
+before_vram = 0x80039AA4
+text = "{ void gt_slip_rumble(uint8_t*, uint32_t); gt_slip_rumble(rdram, (uint32_t)ctx->r4); }"
+
 # Draw distance: draw the whole track ring, with the node pool and matrices allowed into the Expansion Pak's 4 MB.
 [[patches.hook]]
 func = "func_8000A350"
