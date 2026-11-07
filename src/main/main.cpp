@@ -703,12 +703,13 @@ int main(int argc, char** argv) {
     ultramodern::input::callbacks_t input_callbacks{
         .poll_input = recompinput::poll_inputs,
         .get_input = get_input,
-        .set_rumble = recompinput::set_rumble,
+        .set_rumble = gt::rumble_set_game,
         .get_connected_device_info = get_connected_device_info,
     };
 
     ultramodern::events::callbacks_t thread_callbacks{
         .vi_callback = []() {
+            gt::rumble_on_vi();
             recompinput::update_rumble();
             gt::stats_on_vi();
             gt::widescreen_on_vi();

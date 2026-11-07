@@ -5,6 +5,8 @@
 #include "librecomp/game.hpp"
 #include <cstdio>
 #include <map>
+#include <mutex>
+#include <atomic>
 
 #include "gt_config.h"
 
@@ -440,6 +442,7 @@ namespace {
         uint32_t car = 0;
         float throttle = 1.0f;
         float brake = 1.0f;
+        bool live = false;  // driven from the controller now (not played back from a replay's recording)
     };
     PedalCap pedal_caps[4];
     uint32_t pedal_car = 0;  // car whose pedal is being updated
@@ -553,6 +556,7 @@ extern "C" void gt_analog_pedals(uint8_t* rdram, uint32_t control, uint32_t pad)
         source = pad_entry_use[port].source;
         entry = pad_entry_use[port].entry;
     }
+    cap.live = source != PadSource::Playback;
     if (source == PadSource::Playback) {
         // The pedals recorded with this entry; the entry itself or, if the game read past it, the latest one before.
         auto it = recorded_pedals.upper_bound(entry);
@@ -919,6 +923,114 @@ extern "C" void gt_auto_gearbox_end(uint8_t* rdram, recomp_context* ctx) {
         if (gear != last_gear) {
             std::printf("[gear] car %08X gear %d at %.0f RPM\n", car, read_half(rdram, car + 0x178) - 1, read_double(rdram, car + 0x100));
             last_gear = gear;
+        }
+    }
+}
+
+// Slip rumble: the Rumble Pak buzzes while a controller's car spins its driven wheels or slides, harder the more it
+// slips. The game rumbles only for bumps and hits (its wheel contact code, func_80039AA4, starts a short pattern when
+// a wheel lands: over cobbles that repeats, 3 frames on and 3 off). Slip rumble pulses the motor the same way, on for
+// 1 to 3 of every 6 frames as the slip grows, so at full slip it feels like the cobbles. Its pulses are added to the
+// game's own: the motor runs while either asks for it.
+namespace {
+    constexpr uint32_t rumble_status = 0x8019A2E0;  // per port, 0x18 bytes: byte 0 high nibble set when a Rumble Pak is ready,
+                                                     // low nibble set while the game holds rumble off (paused)
+    struct SlipRumblePort {
+        bool game_on = false;   // the game's motor state (osMotorStart/Stop)
+        bool slip_on = false;   // slip rumble's
+        bool applied = false;
+        uint32_t last_vi = 0;   // VI of the latest slip update
+        int phase = 0;          // frame within the 6-frame pulse
+    };
+    std::mutex slip_rumble_mutex;
+    SlipRumblePort slip_rumble_ports[4];
+    std::atomic<uint32_t> slip_rumble_vi{0};
+
+    void apply_rumble(int port) {  // with slip_rumble_mutex held
+        SlipRumblePort& p = slip_rumble_ports[port];
+        const bool on = p.game_on || p.slip_on;
+        if (on != p.applied) {
+            p.applied = on;
+            recompinput::set_rumble(port, on);
+        }
+    }
+
+    float clamp01(float v) {
+        return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+    }
+
+    // How much a car is slipping, 0 (gripping) to 1: wheelspin from how far the driven wheels' revs are from the
+    // revs its road speed gives in this gear, sliding from the angle between its heading and where it is going.
+    float car_slip(uint8_t* rdram, uint32_t car) {
+        const double speed = std::fabs(read_double(rdram, car + 0x110));   // km/h
+        const double road_rpm = read_double(rdram, car + 0x100);
+        const double wheel_rpm = read_double(rdram, car + 0x168);
+        const int gear = read_half(rdram, car + 0x178);                    // 0 reverse, 1 neutral, 2 first...
+        float spin = 0.0f;
+        if (gear != 1) {
+            const double ratio = std::fabs(wheel_rpm - road_rpm) / std::max(road_rpm, 3000.0);
+            spin = clamp01(float((ratio - 0.05) / 0.35));
+        }
+        double angle = std::fabs(std::remainder(read_double(rdram, car + 0x3C0) - read_double(rdram, car + 0x3B8), 360.0));
+        if (gear == 0 && angle > 90.0) {
+            angle = 180.0 - angle;  // backing up
+        }
+        const float slide = clamp01(float((angle - 4.0) / 26.0)) * clamp01(float((speed - 10.0) / 20.0));
+        return std::max(spin, slide);
+    }
+}
+
+extern "C" void gt_slip_rumble(uint8_t* rdram, uint32_t car) {
+    if (gt::get_slip_rumble() != gt::SlipRumble::On) {
+        return;
+    }
+    int port = -1;
+    for (int i = 0; i < 4; i++) {
+        if (pedal_caps[i].car == car && pedal_caps[i].live) {
+            port = i;
+        }
+    }
+    if (port < 0) {
+        return;
+    }
+    const uint8_t status = rdram[((rumble_status + port * 0x18) ^ 3) - 0x80000000u];
+    const bool ready = (status >> 4) != 0 && (status & 0xF) == 0;
+    const float slip = ready ? car_slip(rdram, car) : 0.0f;
+
+    std::lock_guard lock(slip_rumble_mutex);
+    SlipRumblePort& p = slip_rumble_ports[port];
+    const uint32_t vi = slip_rumble_vi.load();
+    p.last_vi = vi;
+    // On frames this pulse: 1 from a slight slip, 2 from a medium one, 3 (half the time, like the cobbles) from 0.75.
+    const int on_frames = slip < 0.08f ? 0 : std::min(3, int(std::ceil(slip * 3.0f - 0.25f)));
+    p.slip_on = p.phase < on_frames;
+    p.phase = (p.phase + 1) % 6;
+    apply_rumble(port);
+
+    static const bool log = std::getenv("GT_RUMBLE_LOG") != nullptr;
+    if (log && slip > 0.0f) {
+        std::printf("[rumble] slip port %d %.2f %s\n", port, slip, p.slip_on ? "on" : "off");
+    }
+}
+
+void gt::rumble_set_game(int controller, bool on) {
+    if (controller < 0 || controller >= 4) {
+        recompinput::set_rumble(controller, on);
+        return;
+    }
+    std::lock_guard lock(slip_rumble_mutex);
+    slip_rumble_ports[controller].game_on = on;
+    apply_rumble(controller);
+}
+
+void gt::rumble_on_vi() {
+    const uint32_t vi = ++slip_rumble_vi;
+    std::lock_guard lock(slip_rumble_mutex);
+    for (int port = 0; port < 4; port++) {
+        SlipRumblePort& p = slip_rumble_ports[port];
+        if ((p.slip_on || p.phase != 0) && vi - p.last_vi > 6) {  // no race frames (paused, or the race is over)
+            p = SlipRumblePort{ p.game_on, false, p.applied };
+            apply_rumble(port);
         }
     }
 }
