@@ -70,8 +70,7 @@ static void add_general_options(recomp::config::Config &config) {
         gt::configkeys::general::auto_gearbox,
         "Automatic Gearbox",
         "How the automatic transmission shifts. <recomp-color primary>RobotBox</recomp-color> is custom automatic "
-        "gearbox logic inspired by RobotBox for Assetto Corsa: it shifts up above 90% of the rev limit and down below "
-        "55% (never into neutral or reverse), and gave faster lap times in testing. "
+        "gearbox logic inspired by RobotBox for Assetto Corsa, and gave faster lap times in testing. "
         "<recomp-color primary>Original</recomp-color> uses each car's shift points, like the N64.",
         auto_gearbox_options,
         gt::AutoGearbox::Original
