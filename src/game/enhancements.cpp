@@ -180,6 +180,15 @@ void gt::widescreen_on_vi() {
     if (mode < race_modes_start) {
         race_ended = false;
     }
+    // The fade into a race (see below).
+    static int transition = 0;  // 0 none, 1 fading out, 2 black, 4 black after the switch, 3 fading in
+    static uint32_t transition_vi = 0;
+    static uint32_t transition_swap = 0;
+    static bool race_seen = false;  // the race has started drawing since the fade began
+    // The loading modes from the start card's end into the race.
+    constexpr uint32_t card_end_mode = 0x800042E8;
+    constexpr uint32_t race_mode = 0x800046C4;
+    const bool loading = (mode >= card_end_mode) && (mode <= race_mode);
     bool race = (mode >= race_modes_start) && (vi_count - full_view_vi <= 120) && (!racing || in_race_mode) && !race_ended;
     // Leaving a race: the game is part-way through its fade to black when it changes mode, so fade the output the rest
     // of the way to black, switch to 4:3 there, and bring the output back while the game's screen is still black.
@@ -215,6 +224,17 @@ void gt::widescreen_on_vi() {
             RT64::setOutputBrightness(1.0f);
         }
     }
+    // Restarting a Time Trial goes from the pause menu straight back into loading, not through the menus: a new race is
+    // on its way. Drop the ended race's fade and go into the new one through black like any other race start.
+    if (race_ended && loading && mode != race_mode) {
+        race_ended = false;
+        end_transition = 0;
+        race = false;
+        transition = 2;
+        transition_vi = vi_count;
+        race_seen = false;
+        RT64::setOutputBrightness(0.0f);
+    }
     {
         static const bool log = std::getenv("GT_MODELOG") != nullptr;
         static int last = -1;
@@ -235,16 +255,9 @@ void gt::widescreen_on_vi() {
     // ratio as the race appears stretched the card for a moment. Fade the output through black instead: fade out
     // (still pillarboxed) as the card ends, hold black through loading until the race mode has begun and the
     // cross-fade is over, switch, fade in.
-    constexpr uint32_t race_mode = 0x800046C4;
     // The cross-fade lasts about 20 game frames: hold for 24 frames from the first race frame (and at least ~0.5 s).
     constexpr uint32_t fade_out_vis = 24, hold_min_vis = 24, hold_max_vis = 300, fade_in_vis = 15, crossfade_frames = 24;
-    static int transition = 0;  // 0 none, 1 fading out, 2 black, 4 black after the switch, 3 fading in
-    static uint32_t transition_vi = 0;
-    static uint32_t transition_swap = 0;
-    static bool race_seen = false;  // the race has started drawing since the fade began
     // Start fading out as the start card ends (the loading modes after it), before the game starts its cross-fade.
-    constexpr uint32_t card_end_mode = 0x800042E8;
-    const bool loading = (mode >= card_end_mode) && (mode <= race_mode);
     if (((!race && !loading) || race_ended) && transition != 0) {
         transition = 0;
         RT64::setOutputBrightness(1.0f);
