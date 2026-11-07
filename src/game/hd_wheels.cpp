@@ -1,9 +1,7 @@
-// HD wheels: the cars' wheels are six-sided prisms (20 triangles). Each graphics task's display lists are scanned as
-// the game submits it; a display list that is such a wheel gets a smooth, many-sided copy built from it, and its first
-// command becomes a branch to the copy. The copy keeps the original's commands (render modes, texture loads) and
-// replaces each run of its triangles with the new geometry: the tyre a ring with rounded shoulders, each side a fan, with the same
-// textures mapped the same way (each part's texture coordinates are a planar projection of its positions, fitted from
-// the original) and normals that curve with the tread.
+// HD wheels: the cars' wheels are six-sided prisms (20 triangles) with a painted rim. Each graphics task's display
+// lists are scanned as the game submits it; a display list that is such a wheel gets a modelled wheel of the same size
+// in its place (its first command becomes a branch to it): a tyre with rounded shoulders, a rim lip and barrel, five
+// spokes and a hub, each part a flat color lit by the game's lights, with the original's render modes.
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -21,8 +19,6 @@ namespace {
     // Built wheels live at the end of the Expansion Pak's matrix buffers (which keep 0x20000 each, see enhancements.cpp).
     constexpr uint32_t pool_start = 0x804C0000u;
     constexpr uint32_t pool_end = 0x80500000u;
-    constexpr int segments = 36;
-    constexpr int shoulder_steps = 3;  // the profile: 4 points per shoulder, 8 in all (4 columns per vertex load)
 
     uint8_t* ram = nullptr;
     uint32_t rd32(uint32_t a) { return *reinterpret_cast<uint32_t*>(ram + ((a & 0x7FFFFFu))); }
@@ -60,15 +56,7 @@ namespace {
         std::vector<Run> runs;
     };
 
-    std::unordered_map<uint64_t, uint32_t> built;        // copies by the original's content (a model loaded again)
-
-    uint64_t content_hash(const Parsed& p) {
-        uint64_t h = 1469598103934665603ull;
-        auto mix = [&](uint64_t v) { h = (h ^ v) * 1099511628211ull; };
-        for (const auto& c : p.cmds) { mix(c.first); mix(c.second); }
-        for (const Run& r : p.runs) for (const auto& t : r.tris) for (const Vtx& v : t) { mix(uint64_t(v.x) << 32 ^ uint64_t(v.y) << 16 ^ uint64_t(v.z)); mix(uint64_t(v.s) << 16 ^ uint64_t(v.t)); }
-        return h;
-    }
+    std::unordered_map<uint64_t, uint32_t> built;        // models by wheel size and side
 
     bool is_geometry(uint32_t op) {
         return op == 0x04 || op == 0xBF || op == 0xB1;
@@ -184,240 +172,277 @@ namespace {
             shape.radius > maxx * 0.6;
     }
 
-    // Planar texture mapping: s, t = a.x + b.y + c.z + d, least squares (with a little damping for the axes a part is
-    // flat along).
-    struct Mapping {
-        double s[4] = {}, t[4] = {};
-        double eval_s(double x, double y, double z) const { return s[0] * x + s[1] * y + s[2] * z + s[3]; }
-        double eval_t(double x, double y, double z) const { return t[0] * x + t[1] * y + t[2] * z + t[3]; }
+    // The model: built in the wheel's own space (x across, the hub's face toward `outer` on x), from surfaces of
+    // revolution and boxes, each part a flat color lit by the game's lights (no textures).
+    constexpr double pi = 3.14159265358979323846;
+
+    struct MVtx {
+        double x, y, z;
+        double nx, ny, nz;
     };
 
-    bool solve4(double m[4][5], double out[4]) {
-        for (int c = 0; c < 4; c++) {
-            int piv = c;
-            for (int r = c + 1; r < 4; r++) if (std::fabs(m[r][c]) > std::fabs(m[piv][c])) piv = r;
-            if (std::fabs(m[piv][c]) < 1e-12) return false;
-            std::swap(m[c], m[piv]);
-            for (int r = 0; r < 4; r++) {
-                if (r == c) continue;
-                const double f = m[r][c] / m[c][c];
-                for (int k = c; k < 5; k++) m[r][k] -= f * m[c][k];
-            }
+    struct Mesh {
+        uint32_t rgba;
+        std::vector<std::array<MVtx, 3>> tris;
+    };
+
+    struct Model {
+        std::vector<Mesh> meshes;
+        int front_sign = 1;   // which winding faces the camera (from the original)
+
+        Mesh& mesh(uint32_t rgba) {
+            for (Mesh& m : meshes) if (m.rgba == rgba) return m;
+            meshes.push_back(Mesh{ rgba, {} });
+            return meshes.back();
         }
-        for (int c = 0; c < 4; c++) out[c] = m[c][4] / m[c][c];
-        return true;
+
+        // A triangle, wound to face along its vertices' normals.
+        void tri(uint32_t rgba, MVtx a, MVtx b, MVtx c) {
+            const double ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+            const double vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+            const double gx = uy * vz - uz * vy, gy = uz * vx - ux * vz, gz = ux * vy - uy * vx;
+            const double d = gx * (a.nx + b.nx + c.nx) + gy * (a.ny + b.ny + c.ny) + gz * (a.nz + b.nz + c.nz);
+            if (std::fabs(gx) + std::fabs(gy) + std::fabs(gz) < 1e-9) return;
+            if ((d > 0) != (front_sign > 0)) std::swap(b, c);
+            mesh(rgba).tris.push_back({ a, b, c });
+        }
+    };
+
+    // A point at angle `ang` around the axis: x along it, r out from it; the normal (nx along, nr outward).
+    MVtx around(double x, double r, double ang, double nx, double nr) {
+        const double c = std::cos(ang), s = std::sin(ang);
+        const double len = std::hypot(nx, nr);
+        return MVtx{ x, r * c, r * s, nx / len, nr / len * c, nr / len * s };
     }
 
-    bool fit(const std::vector<Vtx>& vs, Mapping& map) {
-        for (int which = 0; which < 2; which++) {
-            double m[4][5] = {};
-            for (const Vtx& v : vs) {
-                const double row[4] = { double(v.x), double(v.y), double(v.z), 1.0 };
-                const double val = which == 0 ? v.s : v.t;
-                for (int i = 0; i < 4; i++) {
-                    for (int j = 0; j < 4; j++) m[i][j] += row[i] * row[j];
-                    m[i][4] += row[i] * val;
-                }
-            }
-            for (int i = 0; i < 3; i++) m[i][i] += 1e-3;
-            if (!solve4(m, which == 0 ? map.s : map.t)) {
-                return false;
+    struct ProfilePoint {
+        double x, r, nx, nr;
+        bool sharp = false;   // starts a new face (its own normal on each side)
+    };
+
+    // A surface of revolution through the profile (smooth between points unless one is sharp).
+    void revolve(Model& m, uint32_t rgba, const std::vector<ProfilePoint>& prof, int segs, double a0 = 0, double a1 = 2 * pi) {
+        for (int k = 0; k < segs; k++) {
+            const double t0 = a0 + (a1 - a0) * k / segs, t1 = a0 + (a1 - a0) * (k + 1) / segs;
+            for (size_t i = 0; i + 1 < prof.size(); i++) {
+                const ProfilePoint& p = prof[i];
+                const ProfilePoint& q = prof[i + 1];
+                const MVtx p0 = around(p.x, p.r, t0, p.nx, p.nr), p1 = around(p.x, p.r, t1, p.nx, p.nr);
+                const MVtx q0 = around(q.x, q.r, t0, q.nx, q.nr), q1 = around(q.x, q.r, t1, q.nx, q.nr);
+                m.tri(rgba, p0, q0, q1);
+                m.tri(rgba, p0, q1, p1);
             }
         }
-        return true;
     }
 
-    enum Part { SidePlus, SideMinus, Tread, PartCount };
+    // A flat disc or ring facing along x (dir +1 or -1).
+    void ring(Model& m, uint32_t rgba, double x, double r0, double r1, double dir, int segs) {
+        revolve(m, rgba, { { x, r0, dir, 0 }, { x, r1, dir, 0 } }, segs);
+    }
 
-    Part part_of(const std::array<Vtx, 3>& t) {
-        if (t[0].x == t[1].x && t[1].x == t[2].x) {
-            return t[0].x > 0 ? SidePlus : SideMinus;
+    // A quad with its own flat normal (pointing toward `toward`, a direction).
+    void quad(Model& m, uint32_t rgba, const double* a, const double* b, const double* c, const double* d, const double* toward) {
+        auto v = [&](const double* p) { return MVtx{ p[0], p[1], p[2], toward[0], toward[1], toward[2] }; };
+        m.tri(rgba, v(a), v(b), v(c));
+        m.tri(rgba, v(a), v(c), v(d));
+    }
+
+    constexpr uint32_t rubber = 0x262628FFu;
+    constexpr uint32_t rubber_side = 0x2E2E31FFu;
+    constexpr uint32_t alloy = 0xB4B8C0FFu;
+    constexpr uint32_t alloy_dark = 0x7C8088FFu;
+    constexpr uint32_t barrel = 0x2C2E33FFu;
+    constexpr uint32_t brake = 0x1C1C1EFFu;
+    constexpr uint32_t centre_cap = 0x2A2C30FFu;
+
+    Model make_wheel(double R, double W, double outer, int front_sign) {
+        Model m;
+        m.front_sign = front_sign;
+        const int segs = 32;
+        const double o = outer;           // the hub side's sign on x
+        const double Rr = R * 0.68;       // rim (where the tyre sits)
+        const double sh = std::min(W * 0.4, R * 0.14);
+        const double bead = W * 0.9;
+
+        // Tyre: inner bead, inner sidewall (a slight bulge), rounded shoulder, tread, shoulder, outer sidewall, bead.
+        std::vector<ProfilePoint> tyre;
+        auto add = [&](double u, double r, double nu, double nr) { tyre.push_back({ u * o, r, nu * o, nr }); };
+        add(-bead, Rr, -1.0, -0.35);
+        add(-W, (Rr + R - sh) / 2, -1.0, 0.05);
+        for (int i = 0; i <= 3; i++) {
+            const double a = (pi / 2) * i / 3;
+            add(-W + sh - sh * std::cos(a), R - sh + sh * std::sin(a), -std::cos(a), std::sin(a));
         }
-        return Tread;
+        for (int i = 3; i >= 0; i--) {
+            const double a = (pi / 2) * i / 3;
+            add(W - sh + sh * std::cos(a), R - sh + sh * std::sin(a), std::cos(a), std::sin(a));
+        }
+        add(W, (Rr + R - sh) / 2, 1.0, 0.05);
+        add(bead, Rr, 1.0, -0.35);
+        revolve(m, rubber, tyre, segs);
+
+        // Inner side: closed off dark.
+        ring(m, brake, -bead * o, 0, Rr, -o, segs);
+
+        // Rim: the lip on the outer face, then the barrel inside it back to the dish.
+        const double lip_in = Rr * 0.92;
+        const double face = bead;                  // outer face of the lip
+        const double dish = W * 0.1;               // the dark dish behind the spokes
+        ring(m, alloy, face * o, lip_in, Rr, o, segs);
+        revolve(m, barrel, { { face * o, lip_in, 0, -1 }, { dish * o, lip_in, 0, -1 } }, segs);
+        ring(m, brake, dish * o, 0, lip_in, o, segs);
+
+        // Hub: a short cylinder out to the spokes' face, with a centre cap.
+        const double hub_r = R * 0.17, hub_face = W * 0.8;
+        revolve(m, alloy, { { dish * o, hub_r, 0, 1 }, { hub_face * o, hub_r, 0, 1 } }, 16);
+        ring(m, alloy, hub_face * o, R * 0.08, hub_r, o, 16);
+        revolve(m, alloy_dark, { { hub_face * o, R * 0.08, 0, 1 }, { (hub_face + W * 0.06) * o, R * 0.08, 0, 1 } }, 12);
+        ring(m, centre_cap, (hub_face + W * 0.06) * o, 0, R * 0.08, o, 12);
+
+        // Five spokes: from the hub to the lip, their faces sloping back from the hub, with tapered sides.
+        for (int k = 0; k < 5; k++) {
+            const double ang = 2 * pi * k / 5 + pi / 10;
+            const double ca = std::cos(ang), sa = std::sin(ang);
+            const double ty = -sa, tz = ca;    // across the spoke
+            const double r0 = hub_r * 0.9, r1 = lip_in * 1.01;
+            const double w0 = R * 0.11, w1 = R * 0.07;      // half widths at the hub and the rim
+            const double f0 = hub_face * 0.98, f1 = W * 0.7;    // face height (along x) at the hub and the rim
+            const double b0 = dish + W * 0.05;                  // back, just off the dish
+            auto P = [&](double r, double wdt, double u, double* out) {
+                out[0] = u * o;
+                out[1] = ca * r + ty * wdt;
+                out[2] = sa * r + tz * wdt;
+            };
+            double fl0[3], fr0[3], fl1[3], fr1[3], bl0[3], br0[3], bl1[3], br1[3];
+            P(r0, -w0, f0, fl0); P(r0, w0, f0, fr0); P(r1, -w1, f1, fl1); P(r1, w1, f1, fr1);
+            P(r0, -w0, b0, bl0); P(r0, w0, b0, br0); P(r1, -w1, b0, bl1); P(r1, w1, b0, br1);
+            // Face normal: out along x, tipped toward the rim by the slope.
+            const double slope = (f0 - f1) / (r1 - r0);
+            double nf[3] = { o, ca * slope, sa * slope };
+            const double nl = std::sqrt(nf[0] * nf[0] + nf[1] * nf[1] + nf[2] * nf[2]);
+            nf[0] /= nl; nf[1] /= nl; nf[2] /= nl;
+            const double nside_l[3] = { 0, -ty, -tz }, nside_r[3] = { 0, ty, tz };
+            quad(m, alloy, fl0, fr0, fr1, fl1, nf);
+            quad(m, alloy_dark, fl0, fl1, bl1, bl0, nside_l);
+            quad(m, alloy_dark, fr0, br0, br1, fr1, nside_r);
+        }
+        return m;
     }
 
-    // Writes the new list (and its vertices) into the pool; returns its address or 0.
-    uint32_t build(const Parsed& p, const Shape& shape) {
-        struct Out {
-            std::vector<std::pair<uint32_t, uint32_t>> cmds;
-            std::vector<Vtx> verts;   // in load order; VTX commands reference them by index (fixed up below)
-        } out;
+    // F3DEX combine mode: color = PRIM * SHADE, alpha = PRIM (both cycles).
+    constexpr uint32_t cc_a = 3, cc_b = 15, cc_c = 4, cc_d = 7, ca_a = 7, ca_b = 7, ca_c = 7, ca_d = 3;
+    constexpr uint32_t combine_w0 = 0xFC000000u | (cc_a << 20) | (cc_c << 15) | (ca_a << 12) | (ca_c << 9) | (cc_a << 5) | cc_c;
+    constexpr uint32_t combine_w1 = (cc_b << 28) | (cc_b << 24) | (ca_a << 21) | (ca_c << 18) | (cc_d << 15) | (ca_b << 12) |
+        (ca_d << 9) | (cc_d << 6) | (ca_b << 3) | ca_d;
 
-        // Smooth shading for the curved tread, set back after.
-        bool smooth_set = false;
-        size_t cmd = 0;
-        for (const Run& r : p.runs) {
-            for (; cmd < r.first_cmd; cmd++) out.cmds.push_back(p.cmds[cmd]);
-            cmd = r.end_cmd;
-            if (!smooth_set) {
-                out.cmds.emplace_back(0xB7000000u, 0x00000200u);
-                smooth_set = true;
-            }
-            for (int part = 0; part < PartCount; part++) {
-                std::vector<Vtx> vs;
-                int winding = 0, nx = 0, ny = 0, nz = 0;
-                uint8_t alpha = 255;
-                for (const auto& t : r.tris) {
-                    if (part_of(t) != part) continue;
-                    // Which way round the game winds this part (seen from outside).
-                    const double ax = t[1].x - t[0].x, ay = t[1].y - t[0].y, az = t[1].z - t[0].z;
-                    const double bx = t[2].x - t[0].x, by = t[2].y - t[0].y, bz = t[2].z - t[0].z;
-                    const double cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
-                    double ox = 0, oy = 0, oz = 0;
-                    if (part == Tread) {
-                        oy = (t[0].y + t[1].y + t[2].y) / 3.0 - shape.cy;
-                        oz = (t[0].z + t[1].z + t[2].z) / 3.0 - shape.cz;
+    // Writes the model's display list (and vertices) into the pool, keeping the original's render modes; returns its
+    // address or 0 when the pool is full.
+    uint32_t write_model(const Parsed& p, const Model& m) {
+        std::vector<std::pair<uint32_t, uint32_t>> cmds;
+        std::vector<MVtx> verts;
+        cmds.emplace_back(0xE7000000u, 0);
+        for (const auto& c : p.cmds) {   // the original's render and geometry modes, until its first triangles
+            const uint32_t op = c.first >> 24;
+            if (is_geometry(op)) break;
+            if (op == 0xBA || op == 0xB9 || op == 0xB6 || op == 0xB7) cmds.push_back(c);
+        }
+        cmds.emplace_back(0xBB000000u, 0);              // texturing off
+        cmds.emplace_back(0xB7000000u, 0x00000200u);    // smooth shading
+        cmds.emplace_back(combine_w0, combine_w1);
+        for (const Mesh& mesh : m.meshes) {
+            cmds.emplace_back(0xFA000000u, mesh.rgba);
+            // Pack triangles into loads of up to 32 vertices.
+            size_t i = 0;
+            while (i < mesh.tris.size()) {
+                std::vector<MVtx> load;
+                std::vector<std::array<int, 3>> tris;
+                auto index = [&](const MVtx& v) {
+                    for (size_t k = 0; k < load.size(); k++) {
+                        const MVtx& w = load[k];
+                        if (std::fabs(w.x - v.x) + std::fabs(w.y - v.y) + std::fabs(w.z - v.z) < 1e-6 &&
+                            std::fabs(w.nx - v.nx) + std::fabs(w.ny - v.ny) + std::fabs(w.nz - v.nz) < 1e-6) return int(k);
                     }
-                    else {
-                        ox = part == SidePlus ? 1 : -1;
-                    }
-                    winding += (cx * ox + cy * oy + cz * oz) > 0 ? 1 : -1;
-                    for (const Vtx& v : t) {
-                        vs.push_back(v);
-                        nx += v.nx; ny += v.ny; nz += v.nz;
-                        alpha = v.a;
-                    }
-                }
-                if (vs.empty()) continue;
-                Mapping map;
-                if (!fit(vs, map)) return 0;
-                const bool outward_ccw = winding >= 0;
-                const double hw = shape.half_width;
-                auto make = [&](double x, double ang, double rr, int8_t vnx, int8_t vny, int8_t vnz) {
-                    Vtx v;
-                    const double y = shape.cy + rr * std::cos(ang), z = shape.cz + rr * std::sin(ang);
-                    v.x = int(std::lround(x)); v.y = int(std::lround(y)); v.z = int(std::lround(z));
-                    // Texture coordinates from the unrounded position, so they stay smooth.
-                    v.s = int(std::lround(std::clamp(map.eval_s(x, y, z), -32768.0, 32767.0)));
-                    v.t = int(std::lround(std::clamp(map.eval_t(x, y, z), -32768.0, 32767.0)));
-                    v.nx = vnx; v.ny = vny; v.nz = vnz; v.a = alpha;
-                    return v;
+                    return -1;
                 };
-                const int n = int(vs.size());
-                const int8_t fnx = int8_t(std::clamp(nx / n, -127, 127)), fny = int8_t(std::clamp(ny / n, -127, 127)),
-                    fnz = int8_t(std::clamp(nz / n, -127, 127));
-                // Emits triangles from a vertex list loaded in chunks of up to 32.
-                auto emit_tris = [&](const std::vector<Vtx>& chunk, const std::vector<std::array<int, 3>>& tris) {
-                    const uint32_t base = uint32_t(out.verts.size());
-                    out.verts.insert(out.verts.end(), chunk.begin(), chunk.end());
-                    // VTX: w1 holds the vertex index for now (fixed to an address once the pool is laid out).
-                    out.cmds.emplace_back(0x04000000u | uint32_t(chunk.size()), 0xF0000000u | base);
-                    for (size_t i = 0; i < tris.size(); i += 2) {
-                        auto bits = [&](const std::array<int, 3>& t) {
-                            std::array<int, 3> o = t;
-                            if (!outward_ccw) std::swap(o[1], o[2]);
-                            return (uint32_t(o[0] * 2) << 16) | (uint32_t(o[1] * 2) << 8) | uint32_t(o[2] * 2);
-                        };
-                        if (i + 1 < tris.size()) {
-                            out.cmds.emplace_back(0xB1000000u | bits(tris[i]), bits(tris[i + 1]));
-                        }
-                        else {
-                            out.cmds.emplace_back(0xBF000000u, bits(tris[i]));
-                        }
+                for (; i < mesh.tris.size(); i++) {
+                    int need = 0;
+                    for (const MVtx& v : mesh.tris[i]) if (index(v) < 0) need++;
+                    if (load.size() + need > 32) break;
+                    std::array<int, 3> t;
+                    for (int k = 0; k < 3; k++) {
+                        int idx = index(mesh.tris[i][k]);
+                        if (idx < 0) { load.push_back(mesh.tris[i][k]); idx = int(load.size()) - 1; }
+                        t[k] = idx;
                     }
+                    tris.push_back(t);
+                }
+                const uint32_t base = uint32_t(verts.size());
+                verts.insert(verts.end(), load.begin(), load.end());
+                cmds.emplace_back(0x04000000u | uint32_t(load.size()), 0xF0000000u | base);
+                auto bits = [](const std::array<int, 3>& t) {
+                    return (uint32_t(t[0] * 2) << 16) | (uint32_t(t[1] * 2) << 8) | uint32_t(t[2] * 2);
                 };
-                // The tyre's profile across its width: rounded shoulders (a quarter circle of radius `shoulder`, from the
-                // side's outer edge to the tread) and a flat tread between them.
-                const double shoulder = std::min(hw * 0.35, shape.radius * 0.12);
-                struct ProfilePoint { double x, r, nx, nr; };
-                std::vector<ProfilePoint> profile;
-                for (int i = 0; i <= shoulder_steps; i++) {  // left shoulder: facing -x to facing out
-                    const double a = (3.14159265358979323846 / 2) * i / shoulder_steps;
-                    profile.push_back({ -hw + shoulder - shoulder * std::cos(a), shape.radius - shoulder + shoulder * std::sin(a),
-                        -std::cos(a), std::sin(a) });
-                }
-                for (int i = shoulder_steps; i >= 0; i--) {  // right shoulder: facing out to facing +x
-                    const double a = (3.14159265358979323846 / 2) * i / shoulder_steps;
-                    profile.push_back({ hw - shoulder + shoulder * std::cos(a), shape.radius - shoulder + shoulder * std::sin(a),
-                        std::cos(a), std::sin(a) });
-                }
-                if (part == Tread) {
-                    // Columns of the profile's vertices around the circle, as many columns as fit a load of 32.
-                    const int m = int(profile.size());
-                    const int per_load = 32 / m;
-                    int col = 0;
-                    while (col < segments) {
-                        const int cols = std::min(per_load, segments - col + 1);
-                        std::vector<Vtx> chunk;
-                        std::vector<std::array<int, 3>> tris;
-                        for (int c = 0; c < cols; c++) {
-                            const double ang = 2.0 * 3.14159265358979323846 * (col + c) / segments;
-                            for (const ProfilePoint& pp : profile) {
-                                chunk.push_back(make(pp.x, ang, pp.r, int8_t(std::lround(127 * pp.nx)),
-                                    int8_t(std::lround(127 * pp.nr * std::cos(ang))), int8_t(std::lround(127 * pp.nr * std::sin(ang)))));
-                            }
-                            if (c > 0) {
-                                for (int i = 0; i + 1 < m; i++) {
-                                    const int a0 = (c - 1) * m + i, a1 = a0 + 1, b0 = c * m + i, b1 = b0 + 1;
-                                    // Outward with angle increasing from y toward z and the profile going toward +x.
-                                    tris.push_back({ a0, b1, b0 });
-                                    tris.push_back({ a0, a1, b1 });
-                                }
-                            }
-                        }
-                        emit_tris(chunk, tris);
-                        col += cols - 1;
-                    }
-                }
-                else {
-                    // A fan around the center: 1 + up to 30 ring vertices per load.
-                    const double x = part == SidePlus ? hw : -hw;
-                    int seg = 0;
-                    while (seg < segments) {
-                        const int count = std::min(30, segments - seg);
-                        std::vector<Vtx> chunk;
-                        std::vector<std::array<int, 3>> tris;
-                        Vtx center = make(x, 0.0, 0.0, fnx, fny, fnz);
-                        chunk.push_back(center);
-                        for (int k = 0; k <= count; k++) {
-                            const double ang = 2.0 * 3.14159265358979323846 * (seg + k) / segments;
-                            chunk.push_back(make(x, ang, shape.radius - shoulder, fnx, fny, fnz));
-                            if (k > 0) {
-                                // Seen from +x, angle increasing from y toward z is counterclockwise.
-                                if (part == SidePlus) tris.push_back({ 0, k, k + 1 });
-                                else tris.push_back({ 0, k + 1, k });
-                            }
-                        }
-                        emit_tris(chunk, tris);
-                        seg += count;
-                    }
+                for (size_t k = 0; k < tris.size(); k += 2) {
+                    if (k + 1 < tris.size()) cmds.emplace_back(0xB1000000u | bits(tris[k]), bits(tris[k + 1]));
+                    else cmds.emplace_back(0xBF000000u, bits(tris[k]));
                 }
             }
         }
-        for (; cmd < p.cmds.size(); cmd++) {
-            if ((p.cmds[cmd].first >> 24) == 0xB8 && smooth_set) {
-                out.cmds.emplace_back(0xB6000000u, 0x00000200u);
-            }
-            out.cmds.push_back(p.cmds[cmd]);
-        }
+        cmds.emplace_back(0xE7000000u, 0);
+        cmds.emplace_back(0xB6000000u, 0x00000200u);
+        cmds.emplace_back(0xB8000000u, 0);
 
-        const uint32_t list_bytes = uint32_t(out.cmds.size() * 8);
-        const uint32_t vert_bytes = uint32_t(out.verts.size() * 16);
-        const uint32_t total = (list_bytes + vert_bytes + 15) & ~15u;
-        if (pool_next + total > pool_end) {
-            return 0;
-        }
-        const uint32_t list = pool_next, verts = pool_next + list_bytes;
+        const uint32_t list_bytes = uint32_t(cmds.size() * 8);
+        const uint32_t total = (list_bytes + uint32_t(verts.size()) * 16 + 15) & ~15u;
+        if (pool_next + total > pool_end) return 0;
+        const uint32_t list = pool_next, vaddr = pool_next + list_bytes;
         pool_next += total;
-        for (size_t i = 0; i < out.verts.size(); i++) {
-            const Vtx& v = out.verts[i];
-            const uint32_t va = verts + uint32_t(i) * 16;
-            wr16(va, uint16_t(v.x)); wr16(va + 2, uint16_t(v.y)); wr16(va + 4, uint16_t(v.z)); wr16(va + 6, 0);
-            wr16(va + 8, uint16_t(v.s)); wr16(va + 10, uint16_t(v.t));
-            wr8(va + 12, uint8_t(v.nx)); wr8(va + 13, uint8_t(v.ny)); wr8(va + 14, uint8_t(v.nz)); wr8(va + 15, v.a);
+        for (size_t i = 0; i < verts.size(); i++) {
+            const MVtx& v = verts[i];
+            const uint32_t va = vaddr + uint32_t(i) * 16;
+            auto s16 = [](double d) { return uint16_t(int16_t(std::lround(std::clamp(d, -32768.0, 32767.0)))); };
+            auto n8 = [](double d) { return uint8_t(int8_t(std::lround(std::clamp(d * 127.0, -127.0, 127.0)))); };
+            wr16(va, s16(v.x)); wr16(va + 2, s16(v.y)); wr16(va + 4, s16(v.z)); wr16(va + 6, 0);
+            wr16(va + 8, 0); wr16(va + 10, 0);
+            wr8(va + 12, n8(v.nx)); wr8(va + 13, n8(v.ny)); wr8(va + 14, n8(v.nz)); wr8(va + 15, 0xFF);
         }
-        for (size_t i = 0; i < out.cmds.size(); i++) {
-            uint32_t w0 = out.cmds[i].first, w1 = out.cmds[i].second;
+        for (size_t i = 0; i < cmds.size(); i++) {
+            uint32_t w0 = cmds[i].first, w1 = cmds[i].second;
             if ((w0 >> 24) == 0x04 && (w1 >> 28) == 0xF) {
-                // F3DEX 1.23 gSPVertex(addr, n, 0): 0x04 | n << 10 | (n * 16 - 1).
-                const uint32_t count = w0 & 0xFF;
+                const uint32_t count = w0 & 0xFF;   // F3DEX 1.23 gSPVertex(addr, n, 0)
                 w0 = 0x04000000u | (count << 10) | (count * 16 - 1);
-                w1 = (verts + (w1 & 0xFFFFFFF) * 16) & 0x00FFFFFFu;
+                w1 = (vaddr + (w1 & 0xFFFFFFF) * 16) & 0x00FFFFFFu;
             }
             wr32(list + uint32_t(i) * 8, w0);
             wr32(list + uint32_t(i) * 8 + 4, w1);
         }
         return list;
+    }
+
+    // Which side the hub faces: the original draws its inner side with the tread's texture (in the same run as the
+    // tread) and its outer side, the rim, on its own. And which winding faces the camera.
+    void wheel_sides(const Parsed& p, const Shape& shape, double& outer, int& front_sign) {
+        int plus_alone = 0, minus_alone = 0, wind = 0;
+        for (const Run& r : p.runs) {
+            bool tread = false;
+            int plus = 0, minus = 0;
+            for (const auto& t : r.tris) {
+                const bool same_x = t[0].x == t[1].x && t[1].x == t[2].x;
+                if (!same_x) {
+                    tread = true;
+                    const double ax = t[1].x - t[0].x, ay = t[1].y - t[0].y, az = t[1].z - t[0].z;
+                    const double bx = t[2].x - t[0].x, by = t[2].y - t[0].y, bz = t[2].z - t[0].z;
+                    const double cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+                    const double oy = (t[0].y + t[1].y + t[2].y) / 3.0 - shape.cy, oz = (t[0].z + t[1].z + t[2].z) / 3.0 - shape.cz;
+                    wind += (cy * oy + cz * oz) > 0 ? 1 : -1;
+                }
+                else if (t[0].x > 0) plus++;
+                else minus++;
+            }
+            if (!tread) { plus_alone += plus; minus_alone += minus; }
+        }
+        outer = minus_alone > plus_alone ? -1.0 : 1.0;
+        front_sign = wind >= 0 ? 1 : -1;
     }
 
     void unpatch_all() {
@@ -453,12 +478,18 @@ namespace {
             not_wheels.insert(k ^ dl);
             return;
         }
-        const uint64_t hash = content_hash(p);
+        double outer;
+        int front_sign;
+        wheel_sides(p, shape, outer, front_sign);
+        // Wheels of the same size and side share one model.
+        const uint64_t hash = (uint64_t(std::lround(shape.radius * 8)) << 32) | (uint64_t(std::lround(shape.half_width * 8)) << 8) |
+            (outer > 0 ? 2u : 0u) | (front_sign > 0 ? 1u : 0u);
         auto found = built.find(hash);
-        uint32_t copy = found != built.end() ? found->second : build(p, shape);
+        const Model model = found != built.end() ? Model{} : make_wheel(shape.radius, shape.half_width, outer, front_sign);
+        uint32_t copy = found != built.end() ? found->second : write_model(p, model);
         if (copy == 0) {
             unpatch_all();  // the pool is full (many models over time): start again
-            copy = build(p, shape);
+            copy = write_model(p, model);
             if (copy == 0) return;
         }
         built[hash] = copy;
@@ -467,8 +498,8 @@ namespace {
         wr32(dl + 4, copy & 0x00FFFFFFu);
         static const bool log = std::getenv("GT_WHEEL_LOG") != nullptr;
         if (log) {
-            std::printf("[wheels] %08X: r %.1f half width %.1f -> %08X (pool %X used)\n", dl, shape.radius, shape.half_width,
-                copy, pool_next - pool_start);
+            std::printf("[wheels] %08X: r %.1f half width %.1f outer %+.0f -> %08X (pool %X used)\n", dl, shape.radius,
+                shape.half_width, outer, copy, pool_next - pool_start);
         }
     }
 
