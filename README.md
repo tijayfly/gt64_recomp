@@ -57,6 +57,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   frames, so going into and out of races is clean.
 - **Analog throttle and brake.** With General > Analog Triggers on (the default), the throttle and brake follow how
   far the triggers (or any analog input bound to A and B) are pressed, on top of the game's own pedal ramp.
+- **Custom automatic gearbox.** General > Automatic Gearbox: *Custom* shifts up above 90% of the rev limit and down
+  below 55% (never into neutral or reverse), for cars driven from a controller. *Original* (the default) keeps each
+  car's own shift points.
 - **Draw distance.** Graphics > Draw Distance, three levels:
   - *Maximum* (default): the whole track, every car, shadow and piece of trackside scenery, at any distance. Split
     screen (the intro) uses *Extended*, as the whole track for each view is too slow.
