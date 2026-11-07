@@ -89,6 +89,11 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # Draw distance: the race camera's far plane moved out with its fog kept in place, and the track sections' LOD branches
 # (G_BRANCH_Z) always taken.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-draw-distance.patch)
+# Frame interpolation (refresh rate above the game's): GT64 draws a frame in several tasks (clear, sky, scene, player car,
+# HUD), which RT64 interpolated one at a time (in-between frames showed only the sky). The tasks of a frame are rendered
+# and interpolated together; scenes are matched within their own task; transforms are matched by position relative to the
+# camera (the chase camera's cars move further between frames than their parts are apart); camera cuts aren't interpolated.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-frame-interpolation.patch)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 

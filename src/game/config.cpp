@@ -122,9 +122,8 @@ static void set_control_descriptions() {
     set_game_input_description(GameInput::START, "Pause.");
 }
 
-// RT64's "Display" refresh rate draws extra frames by interpolating between the game's frames, which needs per-object
-// matching GT64 doesn't provide: some in-between frames showed only the sky (blue flashes). The refresh rate is forced
-// to "Original" and its option hidden.
+// RT64's "Display" refresh rate draws extra frames by interpolating between the game's frames (made to work with GT64's
+// several tasks per frame by patches/deps/rt64-frame-interpolation.patch).
 void gt::init_config() {
     std::filesystem::path recomp_dir = recompui::file::get_app_folder_path();
     if (!recomp_dir.empty()) {
@@ -144,7 +143,6 @@ void gt::init_config() {
     recompui::config::create_controls_tab();
     recompui::config::create_sound_tab();
     recompui::config::create_mods_tab();
-    recompui::config::get_graphics_config().update_option_hidden(recompui::config::graphics::options::rr_option, true);
     // HUD Placement moves HUDs drawn with RT64's extended GBI origins; GT64 has none (its HUD keeps the 4:3 layout), and
     // the only users are the sky's edge anchors, which must reach the window's edges: fixed to Full and hidden.
     recompui::config::get_graphics_config().update_option_hidden(recompui::config::graphics::options::hr_option, true);
@@ -152,11 +150,6 @@ void gt::init_config() {
     {
         auto &graphics = recompui::config::get_graphics_config();
         bool changed = false;
-        const uint32_t original = static_cast<uint32_t>(ultramodern::renderer::RefreshRate::Original);
-        if (std::get<uint32_t>(graphics.get_option_value(recompui::config::graphics::options::rr_option)) != original) {
-            graphics.set_option_value(recompui::config::graphics::options::rr_option, original);
-            changed = true;
-        }
         const uint32_t full = static_cast<uint32_t>(ultramodern::renderer::HUDRatioMode::Full);
         if (std::get<uint32_t>(graphics.get_option_value(recompui::config::graphics::options::hr_option)) != full) {
             graphics.set_option_value(recompui::config::graphics::options::hr_option, full);

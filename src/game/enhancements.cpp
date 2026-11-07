@@ -97,7 +97,7 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
-namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); void setFarScale(float scale); }
+namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); void setFarScale(float scale); void setOriginalRateOnly(bool enabled); }
 
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
@@ -495,6 +495,18 @@ extern "C" void gt_rumble_log(int on) {
 
 extern "C" void gt_controller_poll(uint8_t* rdram) {
     controller_polls++;
+
+    // Replays (port 1's pad played back from the recording) and the intro keep the game's own 30 FPS: the renderer draws
+    // no in-between frames for them whatever the refresh rate setting.
+    const bool replay = (pad_entry_use[0].source == PadSource::Playback) && (controller_polls - pad_entry_use[0].poll <= 4);
+    const bool intro = read_word(rdram, mode_func_ptr) == intro_mode;
+    static int last = -1;
+    static const bool rate_log = std::getenv("GT_REPLAY_LOG") != nullptr;
+    if (rate_log && int(replay || intro) != last) {
+        last = int(replay || intro);
+        std::printf("[replay] original frame rate only %d (replay %d intro %d)\n", last, int(replay), int(intro));
+    }
+    RT64::setOriginalRateOnly(replay || intro);
     static const bool log = std::getenv("GT_REPLAY_LOG") != nullptr;
     if (log && (controller_polls % 120) == 0) {
         const int16_t m0 = *reinterpret_cast<int16_t*>(rdram + ((0x800F1450u ^ 2) - 0x80000000u));
