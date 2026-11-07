@@ -1,7 +1,7 @@
 // HD wheels: the cars' wheels are six-sided prisms (20 triangles). Each graphics task's display lists are scanned as
 // the game submits it; a display list that is such a wheel gets a smooth, many-sided copy built from it, and its first
 // command becomes a branch to the copy. The copy keeps the original's commands (render modes, texture loads) and
-// replaces each run of its triangles with the new geometry: the tread a ring of quads, each side a fan, with the same
+// replaces each run of its triangles with the new geometry: the tyre a ring with rounded shoulders, each side a fan, with the same
 // textures mapped the same way (each part's texture coordinates are a planar projection of its positions, fitted from
 // the original) and normals that curve with the tread.
 #include <cstdint>
@@ -18,10 +18,11 @@
 #include "gt_config.h"
 
 namespace {
-    // Built wheels live at the end of the Expansion Pak's matrix buffers (which keep 0x30000 each, see enhancements.cpp).
-    constexpr uint32_t pool_start = 0x804E0000u;
+    // Built wheels live at the end of the Expansion Pak's matrix buffers (which keep 0x20000 each, see enhancements.cpp).
+    constexpr uint32_t pool_start = 0x804C0000u;
     constexpr uint32_t pool_end = 0x80500000u;
-    constexpr int segments = 40;
+    constexpr int segments = 36;
+    constexpr int shoulder_steps = 3;  // the profile: 4 points per shoulder, 8 in all (4 columns per vertex load)
 
     uint8_t* ram = nullptr;
     uint32_t rd32(uint32_t a) { return *reinterpret_cast<uint32_t*>(ram + ((a & 0x7FFFFFu))); }
@@ -44,7 +45,6 @@ namespace {
     std::unordered_map<uint32_t, Patched> patched;       // by display list address
     std::unordered_set<uint32_t> not_wheels;             // lists checked (by address and first words) and left alone
     uint32_t pool_next = pool_start;
-
     uint64_t key(uint32_t dl) {
         return (uint64_t(dl) << 32) ^ rd32(dl + 4) ^ (uint64_t(rd32(dl + 0x20)) << 7) ^ (uint64_t(rd32(dl + 0x40)) << 13);
     }
@@ -59,6 +59,16 @@ namespace {
         std::vector<std::pair<uint32_t, uint32_t>> cmds;
         std::vector<Run> runs;
     };
+
+    std::unordered_map<uint64_t, uint32_t> built;        // copies by the original's content (a model loaded again)
+
+    uint64_t content_hash(const Parsed& p) {
+        uint64_t h = 1469598103934665603ull;
+        auto mix = [&](uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+        for (const auto& c : p.cmds) { mix(c.first); mix(c.second); }
+        for (const Run& r : p.runs) for (const auto& t : r.tris) for (const Vtx& v : t) { mix(uint64_t(v.x) << 32 ^ uint64_t(v.y) << 16 ^ uint64_t(v.z)); mix(uint64_t(v.s) << 16 ^ uint64_t(v.t)); }
+        return h;
+    }
 
     bool is_geometry(uint32_t op) {
         return op == 0x04 || op == 0xBF || op == 0xB1;
@@ -306,24 +316,43 @@ namespace {
                         }
                     }
                 };
+                // The tyre's profile across its width: rounded shoulders (a quarter circle of radius `shoulder`, from the
+                // side's outer edge to the tread) and a flat tread between them.
+                const double shoulder = std::min(hw * 0.35, shape.radius * 0.12);
+                struct ProfilePoint { double x, r, nx, nr; };
+                std::vector<ProfilePoint> profile;
+                for (int i = 0; i <= shoulder_steps; i++) {  // left shoulder: facing -x to facing out
+                    const double a = (3.14159265358979323846 / 2) * i / shoulder_steps;
+                    profile.push_back({ -hw + shoulder - shoulder * std::cos(a), shape.radius - shoulder + shoulder * std::sin(a),
+                        -std::cos(a), std::sin(a) });
+                }
+                for (int i = shoulder_steps; i >= 0; i--) {  // right shoulder: facing out to facing +x
+                    const double a = (3.14159265358979323846 / 2) * i / shoulder_steps;
+                    profile.push_back({ hw - shoulder + shoulder * std::cos(a), shape.radius - shoulder + shoulder * std::sin(a),
+                        std::cos(a), std::sin(a) });
+                }
                 if (part == Tread) {
-                    // Columns of two vertices (both sides) around the circle; 15 columns per load.
+                    // Columns of the profile's vertices around the circle, as many columns as fit a load of 32.
+                    const int m = int(profile.size());
+                    const int per_load = 32 / m;
                     int col = 0;
                     while (col < segments) {
-                        const int cols = std::min(15, segments - col + 1);
+                        const int cols = std::min(per_load, segments - col + 1);
                         std::vector<Vtx> chunk;
                         std::vector<std::array<int, 3>> tris;
                         for (int c = 0; c < cols; c++) {
                             const double ang = 2.0 * 3.14159265358979323846 * (col + c) / segments;
-                            const int8_t vny = int8_t(std::lround(127 * std::cos(ang))), vnz = int8_t(std::lround(127 * std::sin(ang)));
-                            chunk.push_back(make(-hw, ang, shape.radius, 0, vny, vnz));
-                            chunk.push_back(make(hw, ang, shape.radius, 0, vny, vnz));
+                            for (const ProfilePoint& pp : profile) {
+                                chunk.push_back(make(pp.x, ang, pp.r, int8_t(std::lround(127 * pp.nx)),
+                                    int8_t(std::lround(127 * pp.nr * std::cos(ang))), int8_t(std::lround(127 * pp.nr * std::sin(ang)))));
+                            }
                             if (c > 0) {
-                                const int a0 = (c - 1) * 2, a1 = a0 + 1, b0 = c * 2, b1 = b0 + 1;
-                                // Outward normal is +radial: with angle increasing from y toward z and x across,
-                                // (a0, b0, b1) and (a0, b1, a1) face outward counterclockwise.
-                                tris.push_back({ a0, b1, b0 });
-                                tris.push_back({ a0, a1, b1 });
+                                for (int i = 0; i + 1 < m; i++) {
+                                    const int a0 = (c - 1) * m + i, a1 = a0 + 1, b0 = c * m + i, b1 = b0 + 1;
+                                    // Outward with angle increasing from y toward z and the profile going toward +x.
+                                    tris.push_back({ a0, b1, b0 });
+                                    tris.push_back({ a0, a1, b1 });
+                                }
                             }
                         }
                         emit_tris(chunk, tris);
@@ -342,7 +371,7 @@ namespace {
                         chunk.push_back(center);
                         for (int k = 0; k <= count; k++) {
                             const double ang = 2.0 * 3.14159265358979323846 * (seg + k) / segments;
-                            chunk.push_back(make(x, ang, shape.radius, fnx, fny, fnz));
+                            chunk.push_back(make(x, ang, shape.radius - shoulder, fnx, fny, fnz));
                             if (k > 0) {
                                 // Seen from +x, angle increasing from y toward z is counterclockwise.
                                 if (part == SidePlus) tris.push_back({ 0, k, k + 1 });
@@ -400,6 +429,7 @@ namespace {
         }
         patched.clear();
         not_wheels.clear();
+        built.clear();
         pool_next = pool_start;
     }
 
@@ -423,12 +453,15 @@ namespace {
             not_wheels.insert(k ^ dl);
             return;
         }
-        uint32_t copy = build(p, shape);
+        const uint64_t hash = content_hash(p);
+        auto found = built.find(hash);
+        uint32_t copy = found != built.end() ? found->second : build(p, shape);
         if (copy == 0) {
             unpatch_all();  // the pool is full (many models over time): start again
             copy = build(p, shape);
             if (copy == 0) return;
         }
+        built[hash] = copy;
         patched[dl] = Patched{ rd32(dl), rd32(dl + 4), copy };
         wr32(dl, 0x06010000u);
         wr32(dl + 4, copy & 0x00FFFFFFu);
