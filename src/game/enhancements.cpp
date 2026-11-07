@@ -907,9 +907,10 @@ extern "C" void gt_auto_gearbox_end(uint8_t* rdram, recomp_context* ctx) {
     *reinterpret_cast<uint32_t*>(rdram + (gearbox_entry + 4 - 0x80000000u)) = saved_points[1];
 
     const int gear = read_half(rdram, car + 0x178);
-    const bool pedal = read_half(rdram, car + 0x200) != 0 || read_half(rdram, car + 0x204) != 0;
+    static const bool coast_test = std::getenv("GT_GEAR_COAST_TEST") != nullptr;  // testing: as if no pedal is pressed
+    const bool pedal = !coast_test && (read_half(rdram, car + 0x200) != 0 || read_half(rdram, car + 0x204) != 0);
     if (gear >= 3 && !pedal && read_double(rdram, car + 0x100) <= custom_down) {
-        ctx->r4 = car;
+        ctx->r4 = int64_t(int32_t(car));  // registers hold sign-extended 32-bit values
         func_80034048(rdram, ctx);
     }
     static const bool log = std::getenv("GT_GEAR_LOG") != nullptr;
