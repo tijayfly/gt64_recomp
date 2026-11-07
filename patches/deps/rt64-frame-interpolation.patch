@@ -425,10 +425,41 @@ index 777263d..9ce0983 100644
                  if (!presentThreadRunning) {
                      continue;
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index a57257c..ebad6d9 100644
+index a57257c..47b513d 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
-@@ -1799,9 +1799,39 @@ namespace RT64 {
+@@ -4,6 +4,8 @@
+ 
+ #include "rt64_state.h"
+ 
++#include <atomic>
++
+ #include <cassert>
+ #include <cinttypes>
+ 
+@@ -814,6 +816,12 @@ namespace RT64 {
+         dlCpuProfiler.end();
+     }
+ 
++    // GT64: replays and the intro keep the game's own frame rate whatever the refresh rate setting (set by the game code).
++    static std::atomic<bool> originalRateOnly{false};
++    void setOriginalRateOnly(bool enabled) {
++        originalRateOnly = enabled;
++    }
++
+     void State::fullSync() {
+         flush();
+         submitFramebufferPair(FramebufferPair::FlushReason::ProcessDisplayListsEnd);
+@@ -1648,6 +1656,8 @@ namespace RT64 {
+             workload.viFbSize = viHistory.top().vi.fbSize();
+         }
+ 
++        workload.originalRateOnly = originalRateOnly;
++
+         // Log and reset profilers.
+         dlCpuProfiler.end();
+         dlCpuProfiler.log();
+@@ -1799,9 +1809,39 @@ namespace RT64 {
              }
          }
          
@@ -471,7 +502,7 @@ index a57257c..ebad6d9 100644
  
          // Make sure the profiler starts after the workload is advanced to ignore any waiting time.
          dlCpuProfiler.reset();
-@@ -1860,7 +1890,28 @@ namespace RT64 {
+@@ -1860,7 +1900,28 @@ namespace RT64 {
          clearExtended();
      }
      
@@ -500,7 +531,7 @@ index a57257c..ebad6d9 100644
          // If the debugger has paused the plugin, keep submitting the last workload and screen VI for rendering and a present event.
          if (debuggerInspector.paused && !fromEarlyPresent) {
              if (ext.userConfig->developerMode) {
-@@ -2689,6 +2740,9 @@ namespace RT64 {
+@@ -2689,6 +2750,9 @@ namespace RT64 {
      void State::advanceWorkload(Workload &workload, bool paused) {
          workload.workloadId = ++workloadId;
          workload.presentId = presentId;
@@ -510,7 +541,7 @@ index a57257c..ebad6d9 100644
          workload.debuggerCamera = debuggerInspector.camera;
          workload.debuggerRenderer = debuggerInspector.renderer;
          workload.paused = paused;
-@@ -2696,7 +2750,7 @@ namespace RT64 {
+@@ -2696,7 +2760,7 @@ namespace RT64 {
  
      void State::advancePresent(Present &present, bool paused) {
          present.presentId = ++presentId;
@@ -520,10 +551,19 @@ index a57257c..ebad6d9 100644
          present.debuggerFramebuffer.address = debuggerInspector.renderer.framebufferAddress;
          present.debuggerFramebuffer.view = (debuggerInspector.renderer.framebufferIndex >= 0);
 diff --git a/src/hle/rt64_state.h b/src/hle/rt64_state.h
-index 7a8c13b..1345032 100644
+index 7a8c13b..ea00e00 100644
 --- a/src/hle/rt64_state.h
 +++ b/src/hle/rt64_state.h
-@@ -118,6 +118,13 @@ namespace RT64 {
+@@ -33,6 +33,8 @@
+ #include "rt64_workload_queue.h"
+ 
+ namespace RT64 {
++    void setOriginalRateOnly(bool enabled);
++
+     struct Application;
+     struct Interpreter;
+     
+@@ -118,6 +120,13 @@ namespace RT64 {
          bool configurationSaveQueued = false;
          uint64_t workloadId = 0;
          uint64_t presentId = 0;
@@ -550,19 +590,20 @@ index b4c85f5..c4088c6 100644
  
      bool Workload::addFramebufferPair(uint32_t colorAddress, uint8_t colorFmt, uint8_t colorSiz, uint16_t colorWidth, uint32_t depthAddress) {
 diff --git a/src/hle/rt64_workload.h b/src/hle/rt64_workload.h
-index 8ea27d5..7d2a177 100644
+index 8ea27d5..3083e43 100644
 --- a/src/hle/rt64_workload.h
 +++ b/src/hle/rt64_workload.h
-@@ -234,6 +234,7 @@ namespace RT64 {
+@@ -234,6 +234,8 @@ namespace RT64 {
          uint64_t workloadId = 0;
          uint64_t presentId = 0;
          bool paused = false;
-+        bool frameEnd = true; // last workload of a game frame (GT64: workloads of one frame are rendered and interpolated together)
++        bool frameEnd = true;
++        bool originalRateOnly = false; // GT64: the game asked for no in-between frames (replays, the intro) // last workload of a game frame (GT64: workloads of one frame are rendered and interpolated together)
  
          struct {
              uint32_t testZIndexCount = 0;
 diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
-index 5a331aa..214b755 100644
+index 5a331aa..b140c1c 100644
 --- a/src/hle/rt64_workload_queue.cpp
 +++ b/src/hle/rt64_workload_queue.cpp
 @@ -42,6 +42,7 @@ namespace RT64 {
@@ -679,7 +720,7 @@ index 5a331aa..214b755 100644
                          }
                      }
                  }
-@@ -981,7 +1005,9 @@ namespace RT64 {
+@@ -981,12 +1005,14 @@ namespace RT64 {
                  if (requiresFrameMatching) {
                      matchingProfiler.reset();
                      matchingProfiler.start();
@@ -689,6 +730,12 @@ index 5a331aa..214b755 100644
                      matchingProfiler.end();
                      matchingProfiler.log();
  
+                     const bool displayRateAboveOriginal = (workload.viOriginalRate > 0) && (workloadConfig.targetRate > workload.viOriginalRate);
+-                    generateInterpolatedFrames = !workload.paused && displayRateAboveOriginal && !interpolationTargetKey.isEmpty();
++                    generateInterpolatedFrames = !workload.paused && displayRateAboveOriginal && !interpolationTargetKey.isEmpty() && !workload.originalRateOnly;
+ 
+                     const bool resetTicks = !generateInterpolatedFrames || (originalRateForTicks != workload.viOriginalRate) || (displayRateForTicks != workloadConfig.targetRate) || !displayRateAboveOriginal;
+                     if (resetTicks) {
 @@ -1030,10 +1056,14 @@ namespace RT64 {
                  // If the same set of counters is used, we wait until the presentation of its targets is finished so the targets are available to use. Waiting is ignored
                  // if the frame counter has never presented anything yet, as it'll only be a valid value if the previous present event actually did something.

@@ -71,8 +71,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Steady 30 FPS.** The original often dropped below its 30 FPS target; here it holds 30.
 - **60 FPS and above by frame interpolation (testing).** Graphics > Refresh Rate set to Display (or Manual) draws extra
-  frames between the game's own, so races, replays and the intro run at the display's refresh rate while the game
-  itself, its physics and replay playback keep their original 30 FPS timing. Camera cuts are shown as they are.
+  frames between the game's own, so races run at the display's refresh rate while the game itself, its physics and
+  replay playback keep their original 30 FPS timing. Replays and the intro stay at 30 FPS whatever the setting.
 
 ## Building
 
