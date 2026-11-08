@@ -346,6 +346,9 @@ namespace {
             if (is_geometry(op)) break;
             if (op == 0xBA || op == 0xB9 || op == 0xB6 || op == 0xB7) cmds.push_back(c);
         }
+        // The model is written 16 times its size (vertex positions are whole numbers, and the wheel is only about 37
+        // units across) under a matrix that scales it back down.
+        cmds.emplace_back(0x01040040u, 0xE0000000u);   // gSPMatrix(scale, MODELVIEW | MUL | PUSH): address fixed below
         cmds.emplace_back(0xBB000000u, 0);              // texturing off
         cmds.emplace_back(0xB7000000u, 0x00000200u);    // smooth shading
         cmds.emplace_back(combine_w0, combine_w1);
@@ -389,25 +392,35 @@ namespace {
             }
         }
         cmds.emplace_back(0xE7000000u, 0);
+        cmds.emplace_back(0xBD000000u, 0);              // gSPPopMatrix(MODELVIEW)
         cmds.emplace_back(0xB6000000u, 0x00000200u);
         cmds.emplace_back(0xB8000000u, 0);
 
         const uint32_t list_bytes = uint32_t(cmds.size() * 8);
-        const uint32_t total = (list_bytes + uint32_t(verts.size()) * 16 + 15) & ~15u;
+        const uint32_t total = (list_bytes + 64 + uint32_t(verts.size()) * 16 + 15) & ~15u;
         if (pool_next + total > pool_end) return 0;
-        const uint32_t list = pool_next, vaddr = pool_next + list_bytes;
+        const uint32_t list = pool_next, mtx = (pool_next + list_bytes + 7) & ~7u, vaddr = mtx + 64;
         pool_next += total;
+        // N64 matrix: the integer halves of the 16 entries, then the fractions. Scale 1/16 = 0x0000.1000.
+        for (int i = 0; i < 16; i++) {
+            const bool diag = (i % 5) == 0;
+            wr16(mtx + i * 2, i == 15 ? 1 : 0);
+            wr16(mtx + 32 + i * 2, diag && i != 15 ? 0x1000 : 0);
+        }
         for (size_t i = 0; i < verts.size(); i++) {
             const MVtx& v = verts[i];
             const uint32_t va = vaddr + uint32_t(i) * 16;
             auto s16 = [](double d) { return uint16_t(int16_t(std::lround(std::clamp(d, -32768.0, 32767.0)))); };
             auto n8 = [](double d) { return uint8_t(int8_t(std::lround(std::clamp(d * 127.0, -127.0, 127.0)))); };
-            wr16(va, s16(v.x)); wr16(va + 2, s16(v.y)); wr16(va + 4, s16(v.z)); wr16(va + 6, 0);
+            wr16(va, s16(v.x * 16)); wr16(va + 2, s16(v.y * 16)); wr16(va + 4, s16(v.z * 16)); wr16(va + 6, 0);
             wr16(va + 8, 0); wr16(va + 10, 0);
             wr8(va + 12, n8(v.nx)); wr8(va + 13, n8(v.ny)); wr8(va + 14, n8(v.nz)); wr8(va + 15, 0xFF);
         }
         for (size_t i = 0; i < cmds.size(); i++) {
             uint32_t w0 = cmds[i].first, w1 = cmds[i].second;
+            if ((w0 >> 24) == 0x01 && w1 == 0xE0000000u) {
+                w1 = mtx & 0x00FFFFFFu;
+            }
             if ((w0 >> 24) == 0x04 && (w1 >> 28) == 0xF) {
                 const uint32_t count = w0 & 0xFF;   // F3DEX 1.23 gSPVertex(addr, n, 0)
                 w0 = 0x04000000u | (count << 10) | (count * 16 - 1);
