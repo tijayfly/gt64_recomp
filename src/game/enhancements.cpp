@@ -854,6 +854,53 @@ extern "C" void gt_wheel_drawn(uint8_t* rdram) {
     }
 }
 
+// Matrix groups for the car parts (see gt64.us.toml): RT64's extended GBI, enabled with a no-op hook (F3DEX: opcode
+// 0x00 with RT64's magic number) and then commands with opcode 0x64. A part's ID is its car (the object's +2) and its
+// name (+5: "BODY", "FL TIRE", "SHADOW"...), the same across the body's detail levels.
+namespace {
+    bool part_group_open = false;
+    void gfx_put(uint8_t* rdram, uint32_t w0, uint32_t w1) {
+        const uint32_t gfx = rd32(rdram, 0x8010FFC8u);
+        wr32(rdram, gfx, w0);
+        wr32(rdram, gfx + 4, w1);
+        wr32(rdram, 0x8010FFC8u, gfx + 8);
+    }
+}
+
+extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
+    part_group_open = false;
+    const uint32_t obj = rd32(rdram, node + 0x14);
+    if (obj < 0x80000000u || obj >= 0x80800000u) {
+        return;
+    }
+    const uint8_t flag = rdram[((obj + 4) ^ 3) - 0x80000000u];
+    if (flag != 0x60 && flag != 0x20) {
+        return;   // not a car's body, wheel or shadow
+    }
+    uint32_t id = 2166136261u;
+    auto mix = [&](uint8_t b) { id = (id ^ b) * 16777619u; };
+    const uint16_t car = rd16(rdram, obj + 2);
+    mix(uint8_t(car)); mix(uint8_t(car >> 8));
+    for (uint32_t i = 5; i < 16; i++) {
+        const uint8_t c = rdram[((obj + i) ^ 3) - 0x80000000u];
+        if (c == 0) break;
+        mix(c);
+    }
+    id |= 0x80000000u;   // never G_EX_ID_IGNORE (0) or G_EX_ID_AUTO (0xFFFFFFFF)
+    if (id == 0xFFFFFFFFu) id = 0x80000001u;
+    gfx_put(rdram, 0x00525464u, (0x1u << 28) | 0x64u);       // enable the extended GBI at opcode 0x64
+    gfx_put(rdram, 0x6400000Cu, id);                          // gEXMatrixGroupSimple(id, push, modelview, position and
+    gfx_put(rdram, 0x00000029u, 0);                           // rotation interpolated, the rest skipped, linear order)
+    part_group_open = true;
+}
+
+extern "C" void gt_part_end(uint8_t* rdram) {
+    if (part_group_open) {
+        gfx_put(rdram, 0x6400000Du, 1);                       // gEXPopMatrixGroup(modelview)
+        part_group_open = false;
+    }
+}
+
 // The frame's display list and matrix buffers (D_8010FFC8 and D_8012AF48, just set from buffer index `index`, nothing
 // written yet): in the Expansion Pak.
 extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {

@@ -212,3 +212,16 @@ text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
 func = "func_80036AEC"
 before_vram = 0x80036BA4
 text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
+
+# Frame interpolation of the cars: each car part drawn from the object list (func_80009AA0: a matrix and a display
+# list per part) gets an RT64 matrix group with an ID of its own (car and part), so the in-between frames pair every
+# part with itself, not with another car's part that looks the same. See gt_part_begin/end in enhancements.cpp.
+[[patches.hook]]
+func = "func_80009AA0"
+before_vram = 0x80009AB4
+text = "{ void gt_part_begin(uint8_t*, uint32_t); gt_part_begin(rdram, (uint32_t)ctx->r4); }"
+
+[[patches.hook]]
+func = "func_80009AA0"
+before_vram = 0x80009D38
+text = "{ void gt_part_end(uint8_t*); gt_part_end(rdram); }"
