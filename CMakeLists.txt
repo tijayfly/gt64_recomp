@@ -148,6 +148,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # and interpolated together; scenes are matched within their own task; transforms are matched by position relative to the
 # camera (the chase camera's cars move further between frames than their parts are apart); camera cuts aren't interpolated.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-frame-interpolation.patch)
+# Depth of field: past where the next shorter draw distance would end, the race view blurs (a gather pass on the 3D
+# scene's colour and depth before the HUD). The game sets the distance; the extended projection turns depth back into it.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-depth-of-field.patch)
 
 apply_dependency_patches()
 

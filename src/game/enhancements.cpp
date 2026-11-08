@@ -99,7 +99,12 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
-namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); void setFarScale(float scale); void setOriginalRateOnly(bool enabled); }
+namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); void setFarScale(float scale); void setOriginalRateOnly(bool enabled); void setDofStart(float distance); }
+namespace {
+    double section_spacing(uint8_t* rdram);
+    extern int32_t original_ahead;
+    extern int32_t drawn_ahead;
+}
 
 namespace {
     constexpr uint32_t mode_func_ptr = 0x800E8810;
@@ -253,6 +258,17 @@ void gt::widescreen_on_vi() {
     }
     const bool track_drawn = (track_view_vi != 0) && (vi_count - track_view_vi <= 4);
     RT64::setFarScale((track_drawn && gt::get_draw_distance() != gt::DrawDistance::Original) ? 16.0f : 1.0f);
+    // Depth of field: past where the next shorter draw distance would end (Extended: the game's own sections ahead;
+    // Maximum: Extended's 20; Maximum drawing Extended's sections, as in split screen, counts as Extended), the picture
+    // blurs.
+    float dof_start = 0.0f;
+    // (A looser test than track_drawn: RT64 only applies it to frames drawn with the extended far plane anyway, and a
+    // slow frame shouldn't make it blink.)
+    if ((track_view_vi != 0) && (vi_count - track_view_vi <= 60) && gt::get_depth_of_field() == gt::DepthOfField::On && gt::get_draw_distance() != gt::DrawDistance::Original) {
+        const int32_t sections = (drawn_ahead > 20) ? 20 : original_ahead;
+        dof_start = float(section_spacing(rdram) * sections);
+    }
+    RT64::setDofStart(dof_start);
     // Into a race, the game cross-fades from the last 4:3 frame (the start card) to the race, so switching the aspect
     // ratio as the race appears stretched the card for a moment. Fade the output through black instead: fade out
     // (still pillarboxed) as the card ends, hold black through loading until the race mode has begun and the
@@ -718,6 +734,16 @@ namespace {
         return std::max(7000.0, spacing * sections * 1.1);
     }
 
+    // The track's average section spacing (0 before it's been measured).
+    double section_spacing(uint8_t* rdram) {
+        object_reach(rdram, 1);
+        const double reach = object_reach(rdram, 1000);
+        return reach / (1000 * 1.1);
+    }
+
+    int32_t original_ahead = 0;  // sections the game itself draws ahead (gt_sections_ahead's count)
+    int32_t drawn_ahead = 0;     // and the sections drawn ahead with the draw distance setting
+
     // Sections drawn behind and ahead of the camera's: Extended 10 and 20, Maximum the whole ring (Extended's counts while
     // the game draws more than one view a frame: the whole track several times over is too slow).
     void section_counts(uint8_t* rdram, int32_t& behind, int32_t& ahead) {
@@ -753,12 +779,15 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
 }
 
 extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
+    original_ahead = count;
+    drawn_ahead = count;
     if (!extended_draw_distance()) {
         return count;
     }
     int32_t behind, ahead;
     section_counts(rdram, behind, ahead);
-    return std::max(count, ahead);
+    drawn_ahead = std::max(count, ahead);
+    return drawn_ahead;
 }
 
 // func_8000A280, rewritten: append a list node for track section `section` after the pool's last node; past the game's
