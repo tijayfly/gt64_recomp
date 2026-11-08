@@ -854,6 +854,19 @@ extern "C" void gt_wheel_drawn(uint8_t* rdram) {
     }
 }
 
+// Cars drawn as bodies alone (+0x119 bit 0x10, 2 to about 5 track sections from the camera) in full instead, see
+// gt64.us.toml. The current car is *D_800DB5D0.
+extern "C" void gt_car_detail(uint8_t* rdram) {
+    const uint32_t car = rd32(rdram, 0x800DB5D0u);
+    if (car < 0x80000000u || car >= 0x80800000u) {
+        return;
+    }
+    uint8_t& flags = rdram[((car + 0x119) ^ 3) - 0x80000000u];
+    if (!(flags & 0x20)) {
+        flags &= uint8_t(~0x10);
+    }
+}
+
 // Matrix groups for the car parts (see gt64.us.toml): RT64's extended GBI, enabled with a no-op hook (F3DEX: opcode
 // 0x00 with RT64's magic number) and then commands with opcode 0x64. A part's ID is its car (the object's +2) and its
 // name (+5: "BODY", "FL TIRE", "SHADOW"...), the same across the body's detail levels.

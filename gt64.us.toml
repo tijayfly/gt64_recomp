@@ -225,3 +225,11 @@ text = "{ void gt_part_begin(uint8_t*, uint32_t); gt_part_begin(rdram, (uint32_t
 func = "func_80009AA0"
 before_vram = 0x80009D38
 text = "{ void gt_part_end(uint8_t*); gt_part_end(rdram); }"
+
+# Car detail: cars 2 to about 5 track sections from the camera are drawn as bodies alone (func_80028604 sets +0x119
+# bit 0x10), so their wheels switched on and off every few frames around 2 sections. gt_car_detail clears that bit:
+# full cars out to where the game draws simpler bodies (0x20).
+[[patches.hook]]
+func = "func_80028604"
+before_vram = 0x800287F8
+text = "{ void gt_car_detail(uint8_t*); gt_car_detail(rdram); }"
