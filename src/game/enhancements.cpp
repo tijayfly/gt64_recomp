@@ -703,6 +703,7 @@ namespace {
 
     // Race views drawn this frame and last (func_8000A350 runs once per view; the intro's split screen draws two).
     uint32_t views_this_frame = 0;
+    uint32_t game_frame = 0;   // frames built (gt_matrix_buffer)
     uint32_t views_last_frame = 0;
 
     int32_t section_ring(uint8_t* rdram) {
@@ -827,9 +828,36 @@ extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
     wr32f(rdram, node + 0x20, float(rd64f(rdram, section + 0x18) - rd64f(rdram, cam + 0xE8)));
 }
 
+// A wheel just added to the frame's object list (func_8000BB70) for the current car (*D_800DB5D4). The game only
+// updates a car's wheels while it draws them (cars about 2 track sections or more from the camera are drawn as bodies
+// alone), so on a car's first frame back in full detail they're where they were when it went: that frame, drop them.
+extern "C" void gt_wheel_drawn(uint8_t* rdram) {
+    struct Seen {
+        uint32_t frame = 0;
+        bool fresh = false;
+    };
+    static std::map<uint32_t, Seen> seen;
+    const uint32_t car = rd32(rdram, 0x800DB5D4u);
+    Seen& s = seen[car];
+    if (s.frame != game_frame) {
+        s.fresh = (s.frame + 1 != game_frame);
+        s.frame = game_frame;
+    }
+    if (!s.fresh) {
+        return;
+    }
+    const uint8_t index = rdram[(0x8011A594u ^ 3) - 0x80000000u];
+    const uint32_t list = 0x80110928u + uint32_t(index) * 0x1E08u;
+    const uint16_t count = rd16(rdram, list);
+    if (count > 0) {
+        wr16(rdram, list, uint16_t(count - 1));
+    }
+}
+
 // The frame's display list and matrix buffers (D_8010FFC8 and D_8012AF48, just set from buffer index `index`, nothing
 // written yet): in the Expansion Pak.
 extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
+    game_frame++;
     views_last_frame = views_this_frame;
     views_this_frame = 0;
     if (extended_draw_distance()) {

@@ -189,3 +189,26 @@ text = "{ void gt_auto_gearbox_end(uint8_t*, recomp_context*); gt_auto_gearbox_e
 func = "func_800377C0"
 before_vram = 0x80037804
 text = "ctx->r24 &= ~(gpr)0x10;"
+
+# A car's wheels (func_80036A08 front, func_80036AEC rear) are only updated while they're drawn, so a car coming back
+# into full detail drew its wheels where they were when it left it for a frame (wheels jumping off the car).
+# gt_wheel_drawn drops a car's wheels on its first frame back (after the object is added: see enhancements.cpp).
+[[patches.hook]]
+func = "func_80036A08"
+before_vram = 0x80036AC4
+text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
+
+[[patches.hook]]
+func = "func_80036A08"
+before_vram = 0x80036ADC
+text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
+
+[[patches.hook]]
+func = "func_80036AEC"
+before_vram = 0x80036B8C
+text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
+
+[[patches.hook]]
+func = "func_80036AEC"
+before_vram = 0x80036BA4
+text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
