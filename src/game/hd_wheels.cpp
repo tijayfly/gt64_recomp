@@ -344,12 +344,13 @@ namespace {
         for (const auto& c : p.cmds) {   // the original's render and geometry modes, until its first triangles
             const uint32_t op = c.first >> 24;
             if (is_geometry(op)) break;
-            if (op == 0xBA || op == 0xB9 || op == 0xB6 || op == 0xB7) cmds.push_back(c);
+            // (and texture state: left on, as the original has it. The combiner doesn't read it, but RT64 reads the
+            // texture flag for the call before ours when it flushes it, which can be the car's shadow.)
+            if (op == 0xBA || op == 0xB9 || op == 0xB6 || op == 0xB7 || op == 0xBB) cmds.push_back(c);
         }
         // The model is written 16 times its size (vertex positions are whole numbers, and the wheel is only about 37
         // units across) under a matrix that scales it back down.
         cmds.emplace_back(0x01040040u, 0xE0000000u);   // gSPMatrix(scale, MODELVIEW | MUL | PUSH): address fixed below
-        cmds.emplace_back(0xBB000000u, 0);              // texturing off
         cmds.emplace_back(0xB7000000u, 0x00000200u);    // smooth shading
         cmds.emplace_back(combine_w0, combine_w1);
         for (const Mesh& mesh : m.meshes) {
