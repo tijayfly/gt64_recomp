@@ -150,7 +150,7 @@ static void add_motion_blur_option(recomp::config::Config &config) {
         gt::configkeys::graphics::motion_blur,
         "Motion Blur",
         "<recomp-color primary>On</recomp-color> blurs the track and scenery in races as the camera moves past them; the cars "
-        "stay sharp. Only with a Refresh Rate above <recomp-color primary>Original</recomp-color>. <recomp-color primary>Off</recomp-color> keeps "
+        "stay sharp. Only with a Framerate above <recomp-color primary>Original</recomp-color>. <recomp-color primary>Off</recomp-color> keeps "
         "it all sharp.",
         motion_blur_options,
         gt::MotionBlur::On

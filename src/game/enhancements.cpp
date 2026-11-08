@@ -791,7 +791,7 @@ extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
     // only turns), for RT64 to tell how far the scene moved since the last frame. Not in split screen.
     {
         const uint32_t cam = rd32(rdram, 0x8010FFCCu);
-        // Only above the game's own 30 FPS (Refresh Rate not Original): at 30 FPS the blur reads as smearing.
+        // Only above the game's own 30 FPS (Framerate not Original): at 30 FPS the blur reads as smearing.
         const bool valid = (gt::get_motion_blur() == gt::MotionBlur::On) &&
             (ultramodern::renderer::get_graphics_config().rr_option != ultramodern::renderer::RefreshRate::Original) &&
             (views_this_frame <= 1) && (views_last_frame <= 1) &&
