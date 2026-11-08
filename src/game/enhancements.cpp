@@ -102,7 +102,7 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); void setFarScale(float scale); void setOriginalRateOnly(bool enabled); void setDofStart(float distance); void setMotionCamera(double x, double y, double z, bool valid); }
 namespace {
     double section_spacing(uint8_t* rdram);
-    extern int32_t original_ahead;
+    extern int32_t original_forward;
 }
 
 namespace {
@@ -257,12 +257,13 @@ void gt::widescreen_on_vi() {
     }
     const bool track_drawn = (track_view_vi != 0) && (vi_count - track_view_vi <= 4);
     RT64::setFarScale((track_drawn && gt::get_draw_distance() != gt::DrawDistance::Original) ? 16.0f : 1.0f);
-    // Depth of field: past where the original draw distance would end (the game's own sections ahead), the picture blurs.
+    // Depth of field: past where the original draw distance would end facing forward (the game's own sections ahead), the
+    // picture blurs, facing backward too.
     float dof_start = 0.0f;
     // (A looser test than track_drawn: RT64 only applies it to frames drawn with the extended far plane anyway, and a
     // slow frame shouldn't make it blink.)
     if ((track_view_vi != 0) && (vi_count - track_view_vi <= 60) && gt::get_depth_of_field() == gt::DepthOfField::On && gt::get_draw_distance() != gt::DrawDistance::Original) {
-        dof_start = float(section_spacing(rdram) * original_ahead);
+        dof_start = float(section_spacing(rdram) * original_forward);
     }
     RT64::setDofStart(dof_start);
     if (!track_drawn) {
@@ -740,7 +741,10 @@ namespace {
         return reach / (1000 * 1.1);
     }
 
-    int32_t original_ahead = 0;  // sections the game itself draws ahead (gt_sections_ahead's count)
+    int32_t original_behind = 0; // sections the game itself draws behind (gt_sections_behind's count)
+    // Its reach in the camera's direction facing forward (11 ahead, 1 behind); facing backward it draws 7 behind and 1
+    // ahead.
+    int32_t original_forward = 0;
 
     // Sections drawn behind and ahead of the camera's: Extended 10 and 20, Maximum the whole ring (Extended's counts while
     // the game draws more than one view a frame: the whole track several times over is too slow).
@@ -754,6 +758,7 @@ namespace {
 }
 
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
+    original_behind = count;
     views_this_frame++;
     track_views++;
     // Objects outside the track ring (the cars, their wheels and shadows, and trackside scenery: each frame's object
@@ -777,7 +782,11 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
 }
 
 extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
-    original_ahead = count;
+    if (count >= original_behind) {
+        original_forward = count;
+    } else if (original_forward == 0) {
+        original_forward = original_behind;
+    }
     // Motion blur: the camera's position (*D_8010FFCC + 0xD8, doubles; the track is drawn relative to it, the view matrix
     // only turns), for RT64 to tell how far the scene moved since the last frame. Not in split screen.
     {
