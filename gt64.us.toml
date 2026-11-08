@@ -180,3 +180,56 @@ text = "{ void gt_auto_gearbox_begin(uint8_t*, uint32_t); gt_auto_gearbox_begin(
 func = "func_8003412C"
 before_vram = 0x80034154
 text = "{ void gt_auto_gearbox_end(uint8_t*, recomp_context*); gt_auto_gearbox_end(rdram, ctx); }"
+
+# Car detail by track sections from the camera (func_80028604, per car each frame): within 2 sections the full car; then
+# no wheels or shadow (+0x119 bit 0x10); further out not even the full body (0x20). Cars about 2 sections away switched
+# every few frames as they and the camera crossed sections, and their shadows flickered. The shadow's per-frame function
+# (func_800377C0) skips on either bit: only on 0x20 now, so every car whose body is drawn has its shadow.
+[[patches.hook]]
+func = "func_800377C0"
+before_vram = 0x80037804
+text = "ctx->r24 &= ~(gpr)0x10;"
+
+# A car's wheels (func_80036A08 front, func_80036AEC rear) are only updated while they're drawn, so a car coming back
+# into full detail drew its wheels where they were when it left it for a frame (wheels jumping off the car).
+# gt_wheel_drawn drops a car's wheels on its first frame back (after the object is added: see enhancements.cpp).
+[[patches.hook]]
+func = "func_80036A08"
+before_vram = 0x80036AC4
+text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
+
+[[patches.hook]]
+func = "func_80036A08"
+before_vram = 0x80036ADC
+text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
+
+[[patches.hook]]
+func = "func_80036AEC"
+before_vram = 0x80036B8C
+text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
+
+[[patches.hook]]
+func = "func_80036AEC"
+before_vram = 0x80036BA4
+text = "{ void gt_wheel_drawn(uint8_t*); gt_wheel_drawn(rdram); }"
+
+# Frame interpolation of the cars: each car part drawn from the object list (func_80009AA0: a matrix and a display
+# list per part) gets an RT64 matrix group with an ID of its own (car and part), so the in-between frames pair every
+# part with itself, not with another car's part that looks the same. See gt_part_begin/end in enhancements.cpp.
+[[patches.hook]]
+func = "func_80009AA0"
+before_vram = 0x80009AB4
+text = "{ void gt_part_begin(uint8_t*, uint32_t); gt_part_begin(rdram, (uint32_t)ctx->r4); }"
+
+[[patches.hook]]
+func = "func_80009AA0"
+before_vram = 0x80009D38
+text = "{ void gt_part_end(uint8_t*); gt_part_end(rdram); }"
+
+# Car detail: cars 2 to about 5 track sections from the camera are drawn as bodies alone (func_80028604 sets +0x119
+# bit 0x10), so their wheels switched on and off every few frames around 2 sections. gt_car_detail clears that bit:
+# full cars out to where the game draws simpler bodies (0x20).
+[[patches.hook]]
+func = "func_80028604"
+before_vram = 0x800287F8
+text = "{ void gt_car_detail(uint8_t*); gt_car_detail(rdram); }"

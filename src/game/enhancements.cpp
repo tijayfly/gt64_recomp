@@ -703,6 +703,7 @@ namespace {
 
     // Race views drawn this frame and last (func_8000A350 runs once per view; the intro's split screen draws two).
     uint32_t views_this_frame = 0;
+    uint32_t game_frame = 0;   // frames built (gt_matrix_buffer)
     uint32_t views_last_frame = 0;
 
     int32_t section_ring(uint8_t* rdram) {
@@ -827,9 +828,96 @@ extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
     wr32f(rdram, node + 0x20, float(rd64f(rdram, section + 0x18) - rd64f(rdram, cam + 0xE8)));
 }
 
+// A wheel just added to the frame's object list (func_8000BB70) for the current car (*D_800DB5D4). The game only
+// updates a car's wheels while it draws them (cars about 2 track sections or more from the camera are drawn as bodies
+// alone), so on a car's first frame back in full detail they're where they were when it went: that frame, drop them.
+extern "C" void gt_wheel_drawn(uint8_t* rdram) {
+    struct Seen {
+        uint32_t frame = 0;
+        bool fresh = false;
+    };
+    static std::map<uint32_t, Seen> seen;
+    const uint32_t car = rd32(rdram, 0x800DB5D4u);
+    Seen& s = seen[car];
+    if (s.frame != game_frame) {
+        s.fresh = (s.frame + 1 != game_frame);
+        s.frame = game_frame;
+    }
+    if (!s.fresh) {
+        return;
+    }
+    const uint8_t index = rdram[(0x8011A594u ^ 3) - 0x80000000u];
+    const uint32_t list = 0x80110928u + uint32_t(index) * 0x1E08u;
+    const uint16_t count = rd16(rdram, list);
+    if (count > 0) {
+        wr16(rdram, list, uint16_t(count - 1));
+    }
+}
+
+// Cars drawn as bodies alone (+0x119 bit 0x10, 2 to about 5 track sections from the camera) in full instead, see
+// gt64.us.toml. The current car is *D_800DB5D0.
+extern "C" void gt_car_detail(uint8_t* rdram) {
+    const uint32_t car = rd32(rdram, 0x800DB5D0u);
+    if (car < 0x80000000u || car >= 0x80800000u) {
+        return;
+    }
+    uint8_t& flags = rdram[((car + 0x119) ^ 3) - 0x80000000u];
+    if (!(flags & 0x20)) {
+        flags &= uint8_t(~0x10);
+    }
+}
+
+// Matrix groups for the car parts (see gt64.us.toml): RT64's extended GBI, enabled with a no-op hook (F3DEX: opcode
+// 0x00 with RT64's magic number) and then commands with opcode 0x64. A part's ID is its car (the object's +2) and its
+// name (+5: "BODY", "FL TIRE", "SHADOW"...), the same across the body's detail levels.
+namespace {
+    bool part_group_open = false;
+    void gfx_put(uint8_t* rdram, uint32_t w0, uint32_t w1) {
+        const uint32_t gfx = rd32(rdram, 0x8010FFC8u);
+        wr32(rdram, gfx, w0);
+        wr32(rdram, gfx + 4, w1);
+        wr32(rdram, 0x8010FFC8u, gfx + 8);
+    }
+}
+
+extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
+    part_group_open = false;
+    const uint32_t obj = rd32(rdram, node + 0x14);
+    if (obj < 0x80000000u || obj >= 0x80800000u) {
+        return;
+    }
+    const uint8_t flag = rdram[((obj + 4) ^ 3) - 0x80000000u];
+    if (flag != 0x60 && flag != 0x20) {
+        return;   // not a car's body, wheel or shadow
+    }
+    uint32_t id = 2166136261u;
+    auto mix = [&](uint8_t b) { id = (id ^ b) * 16777619u; };
+    const uint16_t car = rd16(rdram, obj + 2);
+    mix(uint8_t(car)); mix(uint8_t(car >> 8));
+    for (uint32_t i = 5; i < 16; i++) {
+        const uint8_t c = rdram[((obj + i) ^ 3) - 0x80000000u];
+        if (c == 0) break;
+        mix(c);
+    }
+    id |= 0x80000000u;   // never G_EX_ID_IGNORE (0) or G_EX_ID_AUTO (0xFFFFFFFF)
+    if (id == 0xFFFFFFFFu) id = 0x80000001u;
+    gfx_put(rdram, 0x00525464u, (0x1u << 28) | 0x64u);       // enable the extended GBI at opcode 0x64
+    gfx_put(rdram, 0x6400000Cu, id);                          // gEXMatrixGroupSimple(id, push, modelview, position and
+    gfx_put(rdram, 0x00000029u, 0);                           // rotation interpolated, the rest skipped, linear order)
+    part_group_open = true;
+}
+
+extern "C" void gt_part_end(uint8_t* rdram) {
+    if (part_group_open) {
+        gfx_put(rdram, 0x6400000Du, 1);                       // gEXPopMatrixGroup(modelview)
+        part_group_open = false;
+    }
+}
+
 // The frame's display list and matrix buffers (D_8010FFC8 and D_8012AF48, just set from buffer index `index`, nothing
 // written yet): in the Expansion Pak.
 extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
+    game_frame++;
     views_last_frame = views_this_frame;
     views_this_frame = 0;
     if (extended_draw_distance()) {
