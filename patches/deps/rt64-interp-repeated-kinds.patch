@@ -8,7 +8,7 @@ index 355ecc3..26a142c 100644
  
 +        // How far a part may be from where it's expected: carried along by an anchor (its car's body), or kept where it
 +        // was relative to the camera when there's none (the cars of a race move about as fast as it).
-+        const float MaxShift = 40.0f;
++        const float MaxShift = 100.0f;
 +        const float MaxLoneShift = 150.0f;
 +
          for (const MovingKind &moving : movingKinds) {
