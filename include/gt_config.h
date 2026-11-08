@@ -45,7 +45,7 @@ namespace gt {
 
     enum class HdWheels {
         Off, // the game's six-sided wheels
-        On,  // smooth, many-sided wheels built from them
+        On,  // modelled wheels (round tyres, five-spoke rims) in their place
     };
 
     void init_config();

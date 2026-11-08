@@ -116,8 +116,8 @@ static void add_hd_wheels_option(recomp::config::Config &config) {
     config.add_enum_option(
         gt::configkeys::graphics::hd_wheels,
         "HD Wheels",
-        "<recomp-color primary>On</recomp-color> replaces the cars' six-sided wheels with smooth round ones, keeping "
-        "their original textures. <recomp-color primary>Off</recomp-color> keeps the original wheels.",
+        "<recomp-color primary>On</recomp-color> replaces the cars' six-sided wheels with modelled ones: round tyres "
+        "and five-spoke alloy rims. <recomp-color primary>Off</recomp-color> keeps the original wheels.",
         hd_wheels_options,
         gt::HdWheels::On
     );
