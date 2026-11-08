@@ -1,22 +1,67 @@
 diff --git a/src/hle/rt64_game_frame.cpp b/src/hle/rt64_game_frame.cpp
-index 355ecc3..8bf8755 100644
+index 355ecc3..26a142c 100644
 --- a/src/hle/rt64_game_frame.cpp
 +++ b/src/hle/rt64_game_frame.cpp
-@@ -850,6 +850,7 @@ namespace RT64 {
-             return hlslpp::float3(moved.xyz);
+@@ -804,6 +804,11 @@ namespace RT64 {
+             return hlslpp::float3(hlslpp::mul(transform[3], view).xyz);
          };
  
++        // How far a part may be from where it's expected: carried along by an anchor (its car's body), or kept where it
++        // was relative to the camera when there's none (the cars of a race move about as fast as it).
 +        const float MaxShift = 40.0f;
++        const float MaxLoneShift = 150.0f;
++
          for (const MovingKind &moving : movingKinds) {
-             if ((moving.cur.size() == 1) && (moving.prev.size() == 1)) {
+             if ((moving.cur.size() != 1) || (moving.prev.size() != 1)) {
                  continue;
-@@ -867,6 +868,12 @@ namespace RT64 {
+@@ -815,6 +820,12 @@ namespace RT64 {
+                 continue;
+             }
+ 
++            // Too far apart to be the same one: another car's (GT64 draws a car's wheels only near the camera, so the
++            // only one of a kind can be a different car's from one frame to the next).
++            if (float(hlslpp::length(viewPos(curTransforms[curIndex], firstCurView) - viewPos(prevTransforms[prevIndex], firstPrevView))) > MaxLoneShift) {
++                continue;
++            }
++
+             matchTransform(firstCurWorkload, firstPrevWorkload, firstCurWorkloadMap, firstPrevWorkloadMap, curIndex, prevIndex, modifiedBuffers);
+             const hlslpp::float4x4 prevView = hlslpp::mul(prevTransforms[prevIndex], firstPrevView);
+             const hlslpp::float4x4 curView = hlslpp::mul(curTransforms[curIndex], firstCurView);
+@@ -827,7 +838,11 @@ namespace RT64 {
+         const size_t MaxAnchors = 64;
+         const float AnchorReach = 300.0f;
+         // Where a point that was at prevPos (view space) is expected now: carried along by the nearest anchor.
+-        auto expectedPos = [&](const hlslpp::float3 &prevPos) {
++        auto expectedPos = [&](const hlslpp::float3 &prevPos, bool *anchored = nullptr) {
++            if (anchored != nullptr) {
++                *anchored = false;
++            }
++
+             if (anchors.size() > MaxAnchors) {
+                 return prevPos;
+             }
+@@ -846,6 +861,10 @@ namespace RT64 {
+                 return prevPos;
+             }
+ 
++            if (anchored != nullptr) {
++                *anchored = true;
++            }
++
+             const hlslpp::float4 moved = hlslpp::mul(hlslpp::float4(prevPos, 1.0f), nearest->motion);
+             return hlslpp::float3(moved.xyz);
+         };
+@@ -865,8 +884,15 @@ namespace RT64 {
+                 }
+ 
                  const hlslpp::float3 prevPos = viewPos(prevTransform, firstPrevView);
-                 const hlslpp::float3 expected = expectedPos(prevPos);
+-                const hlslpp::float3 expected = expectedPos(prevPos);
++                bool anchored = false;
++                const hlslpp::float3 expected = expectedPos(prevPos, &anchored);
                  matchResult.positionDifference = float(hlslpp::length(viewPos(curTransform, firstCurView) - expected));
 +                // Far from where it's expected: another one of the kind (GT64 draws a car's wheels only near the camera,
 +                // so a car's wheels can appear the frame another's disappear). Left unpaired, it's drawn where it is.
-+                if (matchResult.positionDifference > MaxShift) {
++                if (matchResult.positionDifference > (anchored ? MaxShift : MaxLoneShift)) {
 +                    return;
 +                }
 +
