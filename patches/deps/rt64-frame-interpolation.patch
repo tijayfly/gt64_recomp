@@ -11,7 +11,7 @@ index 785de27..8890426 100644
          presentQueue->waitForPresentId(state->presentId);
          workloadQueue->waitForIdle();
 diff --git a/src/hle/rt64_game_frame.cpp b/src/hle/rt64_game_frame.cpp
-index 60f45f6..dc96d91 100644
+index 60f45f6..355ecc3 100644
 --- a/src/hle/rt64_game_frame.cpp
 +++ b/src/hle/rt64_game_frame.cpp
 @@ -48,6 +48,12 @@ namespace RT64 {
@@ -466,6 +466,73 @@ index 60f45f6..dc96d91 100644
          std::stable_sort(matchCandidates.begin(), matchCandidates.end());
          for (const MatchCandidate candidate : matchCandidates) {
              if (firstCurWorkloadMap.transforms[candidate.curIndex].mapped) {
+@@ -610,6 +901,66 @@ namespace RT64 {
+             matchTransform(firstCurWorkload, firstPrevWorkload, firstCurWorkloadMap, firstPrevWorkloadMap, candidate.curIndex, candidate.prevIndex, modifiedBuffers);
+         }
+ 
++        // Parts that changed kind between the frames (a car body switching models, or drawn in a different number of
++        // triangles): pair what's left by place alone, where a part is close to where it's expected to be and turned
++        // the same way. Left unpaired, it would be drawn where it is now while the parts around it are drawn in between
++        // (a car's body jumping off its wheels in a corner).
++        {
++            thread_local std::vector<uint32_t> curRest;
++            thread_local std::vector<uint32_t> prevRest;
++            curRest.clear();
++            prevRest.clear();
++            for (uint64_t kind : kindOrder) {
++                for (uint32_t curIndex : curKindMatrices[kind]) {
++                    if (!firstCurWorkloadMap.transforms[curIndex].mapped) {
++                        curRest.emplace_back(curIndex);
++                    }
++                }
++            }
++
++            for (const auto &it : prevKindMatrices) {
++                for (uint32_t prevIndex : it.second) {
++                    if (!firstCurWorkloadMap.prevTransformsMapped[prevIndex]) {
++                        prevRest.emplace_back(prevIndex);
++                    }
++                }
++            }
++
++            const size_t MaxRest = 128;
++            const float MaxRestDistance = 6.0f;
++            const float MaxRestTurn = 0.3f;
++            if (!curRest.empty() && !prevRest.empty() && (curRest.size() <= MaxRest) && (prevRest.size() <= MaxRest)) {
++                matchCandidates.clear();
++                for (uint32_t prevIndex : prevRest) {
++                    const hlslpp::float4x4 &prevTransform = prevTransforms[prevIndex];
++                    const hlslpp::float3 expected = expectedPos(viewPos(prevTransform, firstPrevView));
++                    for (uint32_t curIndex : curRest) {
++                        const hlslpp::float4x4 &curTransform = curTransforms[curIndex];
++                        const float distance = float(hlslpp::length(viewPos(curTransform, firstCurView) - expected));
++                        if (distance > MaxRestDistance) {
++                            continue;
++                        }
++
++                        TransformMatchResult matchResult = computeTransformMatch(curTransform, firstCurViewProj, prevTransform, firstPrevViewProj, nullptr);
++                        if (!matchResult.valid || (matchResult.orientationDifference > MaxRestTurn)) {
++                            continue;
++                        }
++
++                        matchCandidates.emplace_back(curIndex, prevIndex, distance + matchResult.orientationDifference);
++                    }
++                }
++
++                std::stable_sort(matchCandidates.begin(), matchCandidates.end());
++                for (const MatchCandidate candidate : matchCandidates) {
++                    if (firstCurWorkloadMap.transforms[candidate.curIndex].mapped || firstCurWorkloadMap.prevTransformsMapped[candidate.prevIndex]) {
++                        continue;
++                    }
++
++                    matchTransform(firstCurWorkload, firstPrevWorkload, firstCurWorkloadMap, firstPrevWorkloadMap, candidate.curIndex, candidate.prevIndex, modifiedBuffers);
++                }
++            }
++        }
++
+         if (!modifiedBuffers.empty()) {
+             workloadsModified[firstCurProjIndices.workloadIndex].merge(modifiedBuffers);
+         }
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
 index 0f767a3..d2ca553 100644
 --- a/src/hle/rt64_state.cpp
