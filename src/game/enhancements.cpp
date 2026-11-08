@@ -757,6 +757,16 @@ namespace {
     }
 }
 
+// Every car in full detail (wheels and shadow), see gt64.us.toml: clears the car's (*D_800DB5D0) body-only bits.
+extern "C" void gt_car_detail(uint8_t* rdram) {
+    const uint32_t car = rd32(rdram, 0x800DB5D0u);
+    if (car < 0x80000000u || car >= 0x80800000u) {
+        return;
+    }
+    uint8_t& flags = rdram[((car + 0x119) ^ 3) - 0x80000000u];
+    flags &= uint8_t(~0x30);
+}
+
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     original_behind = count;
     views_this_frame++;

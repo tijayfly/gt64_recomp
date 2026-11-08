@@ -180,3 +180,11 @@ text = "{ void gt_auto_gearbox_begin(uint8_t*, uint32_t); gt_auto_gearbox_begin(
 func = "func_8003412C"
 before_vram = 0x80034154
 text = "{ void gt_auto_gearbox_end(uint8_t*, recomp_context*); gt_auto_gearbox_end(rdram, ctx); }"
+
+# Car detail by track sections from the camera (func_80028604, per car each frame): within 2 sections the full car, then
+# only its body (+0x119 bit 0x10, or 0x20 further out: no wheels or shadow). Cars about 2 sections away switched every
+# few frames as they and the camera crossed sections, and their shadows flickered. gt_car_detail draws them all in full.
+[[patches.hook]]
+func = "func_80028604"
+before_vram = 0x800287F8
+text = "{ void gt_car_detail(uint8_t*); gt_car_detail(rdram); }"
