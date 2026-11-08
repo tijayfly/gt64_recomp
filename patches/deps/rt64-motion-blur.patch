@@ -1,0 +1,901 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 991aa92..fa477f6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -567,9 +567,13 @@ build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill2
+ build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill4XPS.hlsl" "-D SAMPLES_4X")
+ build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill8XPS.hlsl" "-D SAMPLES_8X")
+ build_pixel_shader(  rt64 "src/shaders/DofPS.hlsl")
++build_pixel_shader(  rt64 "src/shaders/MotionBlurPS.hlsl")
+ build_pixel_shader(  rt64 "src/shaders/DofPS.hlsl" "src/shaders/Dof2XPS.hlsl" "-D SAMPLES_2X")
++build_pixel_shader(  rt64 "src/shaders/MotionBlurPS.hlsl" "src/shaders/MotionBlur2XPS.hlsl" "-D SAMPLES_2X")
+ build_pixel_shader(  rt64 "src/shaders/DofPS.hlsl" "src/shaders/Dof4XPS.hlsl" "-D SAMPLES_4X")
++build_pixel_shader(  rt64 "src/shaders/MotionBlurPS.hlsl" "src/shaders/MotionBlur4XPS.hlsl" "-D SAMPLES_4X")
+ build_pixel_shader(  rt64 "src/shaders/DofPS.hlsl" "src/shaders/Dof8XPS.hlsl" "-D SAMPLES_8X")
++build_pixel_shader(  rt64 "src/shaders/MotionBlurPS.hlsl" "src/shaders/MotionBlur8XPS.hlsl" "-D SAMPLES_8X")
+ build_compute_shader(rt64 "src/shaders/TextureDecodeCS.hlsl")
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples2XPS.hlsl" "-D SAMPLES_2X")
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples4XPS.hlsl" "-D SAMPLES_4X")
+diff --git a/src/hle/rt64_framebuffer_pair.cpp b/src/hle/rt64_framebuffer_pair.cpp
+index 64ea672..ae67f49 100644
+--- a/src/hle/rt64_framebuffer_pair.cpp
++++ b/src/hle/rt64_framebuffer_pair.cpp
+@@ -21,6 +21,7 @@ namespace RT64 {
+         depthRead = false;
+         depthWrite = false;
+         dofStart = 0.0f;
++        motionValid = false;
+         syncRequired = false;
+         fillRectOnly = true;
+         ditherPatterns.fill(0);
+@@ -37,6 +38,10 @@ namespace RT64 {
+         auto &proj = projections[projectionCount - 1];
+         proj.addGameCall(gameCall);
+         depthRead = depthRead || gameCall.callDesc.otherMode.zCmp();
++        if ((gameCall.callDesc.otherMode.zUpd() || gameCall.callDesc.otherMode.zCmp()) && !motionValid && (proj.type == Projection::Type::Perspective)) {
++            motionValid = getMotionCamera(motionCamera[0], motionCamera[1], motionCamera[2]);
++        }
++
+         if ((gameCall.callDesc.otherMode.zUpd() || gameCall.callDesc.otherMode.zCmp()) && (dofStart <= 0.0f)) {
+             float start, m22, m32, vpScaleZ, vpTranslateZ;
+             if (getDofParams(start, m22, m32, vpScaleZ, vpTranslateZ)) {
+diff --git a/src/hle/rt64_framebuffer_pair.h b/src/hle/rt64_framebuffer_pair.h
+index 52e7992..b9efb42 100644
+--- a/src/hle/rt64_framebuffer_pair.h
++++ b/src/hle/rt64_framebuffer_pair.h
+@@ -45,6 +45,9 @@ namespace RT64 {
+         bool depthWrite;
+         // Distance depth of field (GT64), latched from the first depth-tested call: 0 start = off.
+         float dofStart, dofM22, dofM32, dofVpScaleZ, dofVpTranslateZ;
++        // Motion blur (GT64): the race camera's position, latched with it.
++        bool motionValid;
++        double motionCamera[3];
+         bool syncRequired;
+         bool fillRectOnly; // This only applies if there's at least one draw call.
+         std::vector<uint32_t> startFbDiscards;
+diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
+index f8c76e8..bede5d8 100644
+--- a/src/hle/rt64_vi.cpp
++++ b/src/hle/rt64_vi.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include <mutex>
+ #include <cmath>
+ #include <cassert>
+ #include <memory.h>
+@@ -96,6 +97,26 @@ namespace RT64 {
+         return (start > 0.0f) && (m32 < 0.0f) && (vpScaleZ != 0.0f);
+     }
+ 
++    static std::mutex motionCameraMutex;
++    static double motionCamera[3] = { 0.0, 0.0, 0.0 };
++    static bool motionCameraValid = false;
++
++    void setMotionCamera(double x, double y, double z, bool valid) {
++        std::scoped_lock lock(motionCameraMutex);
++        motionCamera[0] = x;
++        motionCamera[1] = y;
++        motionCamera[2] = z;
++        motionCameraValid = valid;
++    }
++
++    bool getMotionCamera(double &x, double &y, double &z) {
++        std::scoped_lock lock(motionCameraMutex);
++        x = motionCamera[0];
++        y = motionCamera[1];
++        z = motionCamera[2];
++        return motionCameraValid;
++    }
++
+     // GT64 lays out its logos, title and menus in a 288x208 box at (16, 16) inside a black border. While the game sets
+     // this, 2D draws (rectangles and scissors) are remapped so that box fills the 320x240 frame.
+     static std::atomic<bool> cardRemap{ false };
+diff --git a/src/hle/rt64_vi.h b/src/hle/rt64_vi.h
+index b47632c..ebc3fe7 100644
+--- a/src/hle/rt64_vi.h
++++ b/src/hle/rt64_vi.h
+@@ -49,6 +49,10 @@ namespace RT64 {
+     void setDofViewportZ(float scale, float translate);
+     bool getDofParams(float &start, float &m22, float &m32, float &vpScaleZ, float &vpTranslateZ);
+ 
++    // Motion blur (GT64): the race camera's position this frame, which the track is drawn relative to.
++    void setMotionCamera(double x, double y, double z, bool valid);
++    bool getMotionCamera(double &x, double &y, double &z);
++
+     struct VI {
+         union Status {
+             struct {
+diff --git a/src/render/rt64_descriptor_sets.h b/src/render/rt64_descriptor_sets.h
+index f878f58..9318926 100644
+--- a/src/render/rt64_descriptor_sets.h
++++ b/src/render/rt64_descriptor_sets.h
+@@ -659,6 +659,24 @@ namespace RT64 {
+         }
+     };
+ 
++    struct MotionBlurDescriptorSet : RenderDescriptorSetBase {
++        uint32_t gColor;
++        uint32_t gDepth;
++        uint32_t gSceneDepth;
++
++        MotionBlurDescriptorSet(RenderDevice *device = nullptr) {
++            builder.begin();
++            gColor = builder.addTexture(1);
++            gDepth = builder.addTexture(2);
++            gSceneDepth = builder.addTexture(3);
++            builder.end();
++
++            if (device != nullptr) {
++                create(device);
++            }
++        }
++    };
++
+     struct TextureDecodeDescriptorSet : RenderDescriptorSetBase {
+         uint32_t TMEM;
+         uint32_t RGBA32;
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+index 88f57f7..cd8c334 100644
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -1238,7 +1238,7 @@ namespace RT64 {
+ 
+         const Framebuffer &framebuffer = framebufferVector[framebufferIndex];
+         // Another pass of the 3D scene (the cars after the track) comes before it; anything else (the HUD) after it.
+-        if ((pendingDof.colorTarget != nullptr) && ((framebuffer.dofStart <= 0.0f) || (framebuffer.renderTargetDrawCall.fbStorage->colorTarget != pendingDof.colorTarget))) {
++        if ((pendingDof.colorTarget != nullptr) && (!framebuffer.scene3D || (framebuffer.renderTargetDrawCall.fbStorage->colorTarget != pendingDof.colorTarget))) {
+             applyPendingDof(worker);
+         }
+ 
+@@ -1361,7 +1361,32 @@ namespace RT64 {
+             commandList->drawInstanced(3, 1, 0, 0);
+             commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_WRITE));
+ 
+-            if (dofAllowed && (framebuffer.dofStart > 0.0f) && (framebuffer.dofM32 < 0.0f) && (framebuffer.dofVpScaleZ != 0.0f)) {
++            if (dofAllowed && framebuffer.scene3D) {
++                // The first 3D pass of the frame (the track): keep its depth, to tell the cars drawn after it apart.
++                if ((pendingDof.colorTarget == nullptr) && framebuffer.motion.valid) {
++                    if ((sceneDepthCopy == nullptr) || (sceneDepthWidth != depthTarget->width) || (sceneDepthHeight != depthTarget->height) ||
++                        (sceneDepthSamples != depthTarget->multisampling.sampleCount) || (sceneDepthFormat != depthTarget->format)) {
++                        sceneDepthCopyView.reset();
++                        sceneDepthCopy = worker->device->createTexture(RenderTextureDesc::DepthTarget(depthTarget->width, depthTarget->height, depthTarget->format, depthTarget->multisampling));
++                        sceneDepthCopyView = sceneDepthCopy->createTextureView(RenderTextureViewDesc::Texture2D(depthTarget->format));
++                        sceneDepthWidth = depthTarget->width;
++                        sceneDepthHeight = depthTarget->height;
++                        sceneDepthSamples = depthTarget->multisampling.sampleCount;
++                        sceneDepthFormat = depthTarget->format;
++                    }
++
++                    commandList->barriers(RenderBarrierStage::COPY, {
++                        RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::COPY_SOURCE),
++                        RenderTextureBarrier(sceneDepthCopy.get(), RenderTextureLayout::COPY_DEST)
++                    });
++
++                    commandList->copyTexture(sceneDepthCopy.get(), depthTarget->texture.get());
++                    commandList->barriers(RenderBarrierStage::GRAPHICS, {
++                        RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_WRITE),
++                        RenderTextureBarrier(sceneDepthCopy.get(), RenderTextureLayout::DEPTH_READ)
++                    });
++                }
++
+                 pendingDof.colorTarget = colorTarget;
+                 pendingDof.depthTarget = depthTarget;
+                 pendingDof.resolutionScale = framebuffer.resolutionScale;
+@@ -1370,6 +1395,7 @@ namespace RT64 {
+                 pendingDof.m32 = framebuffer.dofM32;
+                 pendingDof.vpScaleZ = framebuffer.dofVpScaleZ;
+                 pendingDof.vpTranslateZ = framebuffer.dofVpTranslateZ;
++                pendingDof.motion = framebuffer.motion;
+             }
+         }
+     }
+@@ -1393,6 +1419,7 @@ namespace RT64 {
+         RenderTarget *depthTarget = pendingDof.depthTarget;
+         const float resolutionScale = pendingDof.resolutionScale;
+         const float start = pendingDof.start, m22 = pendingDof.m22, m32 = pendingDof.m32, vpScaleZ = pendingDof.vpScaleZ, vpTranslateZ = pendingDof.vpTranslateZ;
++        const MotionBlurParams motion = pendingDof.motion;
+         pendingDof = PendingDof();
+         if ((colorTarget == nullptr) || (depthTarget == nullptr) || (crackFillCopy == nullptr) ||
+             (crackFillCopyWidth != colorTarget->width) || (crackFillCopyHeight != colorTarget->height) || (crackFillCopySamples != colorTarget->multisampling.sampleCount) ||
+@@ -1400,9 +1427,13 @@ namespace RT64 {
+             return;
+         }
+ 
++        if (motion.valid) {
++            drawMotionBlur(worker, colorTarget, depthTarget, resolutionScale, motion);
++        }
++
+         const bool multisampled = (colorTarget->multisampling.sampleCount > 1);
+         const ShaderRecord &dofShader = multisampled ? shaderLibrary->dofMS : shaderLibrary->dof;
+-        if (dofShader.pipeline == nullptr) {
++        if ((dofShader.pipeline == nullptr) || !((start > 0.0f) && (m32 < 0.0f) && (vpScaleZ != 0.0f))) {
+             return;
+         }
+ 
+@@ -1466,6 +1497,193 @@ namespace RT64 {
+         commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_WRITE));
+     }
+ 
++    void FramebufferRenderer::drawMotionBlur(RenderWorker *worker, RenderTarget *colorTarget, RenderTarget *depthTarget, float resolutionScale, const MotionBlurParams &params) {
++        const bool multisampled = (colorTarget->multisampling.sampleCount > 1);
++        const ShaderRecord &shader = multisampled ? shaderLibrary->motionBlurMS : shaderLibrary->motionBlur;
++        if ((shader.pipeline == nullptr) || (sceneDepthCopy == nullptr) || (sceneDepthWidth != depthTarget->width) || (sceneDepthHeight != depthTarget->height) ||
++            (sceneDepthSamples != depthTarget->multisampling.sampleCount)) {
++            return;
++        }
++
++        if (motionBlurSet == nullptr) {
++            motionBlurSet = std::make_unique<MotionBlurDescriptorSet>(worker->device);
++        }
++
++        if (motionBlurSetColor != crackFillCopy.get()) {
++            motionBlurSet->setTexture(motionBlurSet->gColor, crackFillCopy.get(), RenderTextureLayout::SHADER_READ);
++            motionBlurSetColor = crackFillCopy.get();
++        }
++
++        if (motionBlurSetDepth != depthTarget->texture.get()) {
++            motionBlurSet->setTexture(motionBlurSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
++            motionBlurSetDepth = depthTarget->texture.get();
++        }
++
++        if (motionBlurSetScene != sceneDepthCopy.get()) {
++            motionBlurSet->setTexture(motionBlurSet->gSceneDepth, sceneDepthCopy.get(), RenderTextureLayout::DEPTH_READ, sceneDepthCopyView.get());
++            motionBlurSetScene = sceneDepthCopy.get();
++        }
++
++        RenderCommandList *commandList = worker->commandList.get();
++        commandList->barriers(RenderBarrierStage::COPY, {
++            RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COPY_SOURCE),
++            RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::COPY_DEST)
++        });
++
++        commandList->copyTexture(crackFillCopy.get(), colorTarget->texture.get());
++        commandList->barriers(RenderBarrierStage::GRAPHICS, {
++            RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COLOR_WRITE),
++            RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::SHADER_READ),
++            RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ),
++            RenderTextureBarrier(sceneDepthCopy.get(), RenderTextureLayout::DEPTH_READ)
++        });
++
++        colorTarget->setupColorFramebuffer(worker);
++        const RenderViewport viewport(0.0f, 0.0f, float(colorTarget->width), float(colorTarget->height));
++        const RenderRect scissor(0, 0, int32_t(colorTarget->width), int32_t(colorTarget->height));
++        static const bool debug = (getenv("GT_MB_DEBUG") != nullptr);
++        static const float shutter = (getenv("GT_MB_SHUTTER") != nullptr) ? float(atof(getenv("GT_MB_SHUTTER"))) : 0.5f;
++        static const float maxLength = (getenv("GT_MB_MAX") != nullptr) ? float(atof(getenv("GT_MB_MAX"))) : 16.0f;
++        struct {
++            float reproject[16];
++            float wColumn[4];
++            float offset[4];
++            int32_t width;
++            int32_t height;
++            float shutter;
++            float maxLength;
++            float depthMax;
++            int32_t debug;
++            int32_t gapRadius;
++            int32_t pad1;
++        } pushConstants;
++        static_assert(sizeof(pushConstants) == sizeof(int32_t) * 32, "Push constant size");
++        memcpy(pushConstants.reproject, params.reproject, sizeof(pushConstants.reproject));
++        memcpy(pushConstants.wColumn, params.wColumn, sizeof(pushConstants.wColumn));
++        memcpy(pushConstants.offset, params.offset, sizeof(pushConstants.offset));
++        pushConstants.width = int32_t(colorTarget->width);
++        pushConstants.height = int32_t(colorTarget->height);
++        pushConstants.shutter = shutter;
++        pushConstants.maxLength = maxLength * resolutionScale;
++        pushConstants.depthMax = params.depthMax;
++        pushConstants.debug = debug ? 1 : 0;
++        pushConstants.gapRadius = std::max(1, int32_t(std::lround(3.0f * resolutionScale)));
++        pushConstants.pad1 = 0;
++
++        commandList->setFramebuffer(colorTarget->textureFramebuffer.get());
++        commandList->setViewports(viewport);
++        commandList->setScissors(scissor);
++        commandList->setPipeline(shader.pipeline.get());
++        commandList->setGraphicsPipelineLayout(shader.pipelineLayout.get());
++        commandList->setGraphicsDescriptorSet(motionBlurSet->get(), 0);
++        commandList->setGraphicsPushConstants(0, &pushConstants);
++        commandList->setVertexBuffers(0, nullptr, 0, nullptr);
++        commandList->drawInstanced(3, 1, 0, 0);
++        commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_WRITE));
++    }
++
++    void FramebufferRenderer::computeMotionBlur(const DrawParams &p, uint32_t transformsIndex, const double camera[3], MotionBlurParams &out) {
++        out.valid = false;
++        const DrawData &drawData = p.curWorkload->drawData;
++        const hlslpp::float4x4 viewProj = drawData.viewProjTransforms[transformsIndex];
++        const hlslpp::float4x4 view = drawData.viewTransforms[transformsIndex];
++        // A new game frame: the camera moved. The cars' pass and repeated, interpolated renders of a frame have the same
++        // camera and keep the track's view-projection (the intro draws its close-up car with another one).
++        if (!motionCur.valid || (camera[0] != motionCur.camera[0]) || (camera[1] != motionCur.camera[1]) || (camera[2] != motionCur.camera[2])) {
++            motionPrev = motionCur;
++            motionCur.valid = true;
++            motionCur.viewProj = viewProj;
++            motionCur.view = view;
++            motionCur.camera[0] = camera[0];
++            motionCur.camera[1] = camera[1];
++            motionCur.camera[2] = camera[2];
++        }
++
++        if (!motionPrev.valid) {
++            return;
++        }
++
++        // Camera cuts (replays, the camera views): no blur.
++        const double move[3] = { motionCur.camera[0] - motionPrev.camera[0], motionCur.camera[1] - motionPrev.camera[1], motionCur.camera[2] - motionPrev.camera[2] };
++        const double moveLength = std::sqrt(move[0] * move[0] + move[1] * move[1] + move[2] * move[2]);
++        float turn = 0.0f;
++        for (int i = 0; i < 3; i++) {
++            const hlslpp::float3 a = motionCur.view[i].xyz;
++            const hlslpp::float3 b = motionPrev.view[i].xyz;
++            const float la = float(hlslpp::length(a));
++            const float lb = float(hlslpp::length(b));
++            if ((la > 0.0f) && (lb > 0.0f)) {
++                turn += 1.0f - float(hlslpp::dot(a, b)) / (la * lb);
++            }
++        }
++
++        if ((moveLength > 1000.0) || (turn > 0.05f)) {
++            return;
++        }
++
++        // Pixel <-> the game's NDC: its viewport, in N64 pixels, scaled to the target and centred on it horizontally.
++        const interop::RSPViewport &viewport = drawData.rspViewports[transformsIndex];
++        const float rs = p.resolutionScale.y;
++        const float targetWidth = float(p.fbStorage->colorTarget->width);
++        const float sx = viewport.scale.x * rs;
++        const float sy = viewport.scale.y * rs;
++        const float cx = targetWidth / 2.0f + (viewport.translate.x - float(p.fbWidth) / 2.0f) * rs;
++        const float cy = viewport.translate.y * rs;
++        const float sz = viewport.scale.z;
++        const float tz = viewport.translate.z;
++        if ((sx == 0.0f) || (sy == 0.0f) || (sz == 0.0f)) {
++            return;
++        }
++
++        // Row vectors: ndc = pixel * toNdc, pixel = ndc * toPixel (homogeneous).
++        const hlslpp::float4x4 toNdc(
++            1.0f / sx, 0.0f, 0.0f, 0.0f,
++            0.0f, -1.0f / sy, 0.0f, 0.0f,
++            0.0f, 0.0f, 1.0f / sz, 0.0f,
++            -cx / sx, cy / sy, -tz / sz, 1.0f);
++        const hlslpp::float4x4 toPixel(
++            sx, 0.0f, 0.0f, 0.0f,
++            0.0f, -sy, 0.0f, 0.0f,
++            0.0f, 0.0f, 1.0f, 0.0f,
++            cx, cy, 0.0f, 1.0f);
++
++        // The point relative to this frame's camera: h / h.w with h = pixel * toNdc * inverse(viewProj). Relative to the
++        // last frame's camera it's that + move, which lands at (h * prevViewProj) / h.w + (move, 0) * prevViewProj.
++        const hlslpp::float4x4 toRelative = hlslpp::mul(toNdc, hlslpp::inverse(motionCur.viewProj));
++        // The camera's turning only counts in part: whole-screen smears from it read as blurry rather than fast.
++        static const float turnWeight = (getenv("GT_MB_TURN") != nullptr) ? float(atof(getenv("GT_MB_TURN"))) : 0.5f;
++        const hlslpp::float4x4 prevViewProj = motionCur.viewProj + (motionPrev.viewProj - motionCur.viewProj) * turnWeight;
++        const hlslpp::float4x4 prevToPixel = hlslpp::mul(prevViewProj, toPixel);
++        const hlslpp::float4x4 reproject = hlslpp::mul(toRelative, prevToPixel);
++        const hlslpp::float4 offset = hlslpp::mul(hlslpp::float4(-float(move[0]), -float(move[1]), -float(move[2]), 0.0f), prevToPixel);
++        for (int i = 0; i < 4; i++) {
++            for (int j = 0; j < 4; j++) {
++                out.reproject[i * 4 + j] = float(reproject[i][j]);
++            }
++
++            out.wColumn[i] = float(toRelative[i][3]);
++            out.offset[i] = float(offset[i]);
++        }
++
++        out.depthMax = sz + tz - 1e-6f;
++
++        // Camera cuts the tests above missed (a new shot from nearby, a zoom): the far distance at the centre of the view
++        // jumping across the screen.
++        {
++            const hlslpp::float4 q(cx, cy + sy * 0.25f, out.depthMax, 1.0f);
++            const hlslpp::float4 h = hlslpp::mul(q, toRelative);
++            const hlslpp::float4 prev = hlslpp::mul(q, reproject) / float(h.w) + offset;
++            const float dx = float(prev.x / prev.w) - float(q.x);
++            const float dy = float(prev.y / prev.w) - float(q.y);
++            const float jump = std::sqrt(dx * dx + dy * dy) / (sy * 2.0f);
++            if (!(jump < 0.2f) || !(float(prev.w) > 0.0f)) {
++                return;
++            }
++        }
++
++        out.valid = true;
++    }
++
+     void FramebufferRenderer::waitForUploaders() {
+         shaderUploader->wait();
+ 
+@@ -1601,6 +1819,18 @@ namespace RT64 {
+         framebuffer.dofM32 = fbPair.dofM32;
+         framebuffer.dofVpScaleZ = fbPair.dofVpScaleZ;
+         framebuffer.dofVpTranslateZ = fbPair.dofVpTranslateZ;
++        framebuffer.motion = MotionBlurParams();
++        if (dofAllowed && fbPair.motionValid && (p.fbStorage->colorTarget != nullptr)) {
++            for (uint32_t pr = 0; pr < fbPair.projectionCount; pr++) {
++                const Projection &proj = fbPair.projections[pr];
++                if ((proj.type == Projection::Type::Perspective) && (proj.gameCallCount > 0)) {
++                    computeMotionBlur(p, proj.transformsIndex, fbPair.motionCamera, framebuffer.motion);
++                    break;
++                }
++            }
++        }
++
++        framebuffer.scene3D = (framebuffer.dofStart > 0.0f) || fbPair.motionValid;
+ 
+         // Crack fill (see CrackFillPS.hlsl): for colour targets drawn with depth writes this frame.
+         {
+diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
+index 5ba4344..7287803 100644
+--- a/src/render/rt64_framebuffer_renderer.h
++++ b/src/render/rt64_framebuffer_renderer.h
+@@ -111,6 +111,15 @@ namespace RT64 {
+         bool rtSupport = false;
+ #   endif
+ 
++        // Motion blur (GT64, MotionBlurPS.hlsl): pixel (x, y, depth, 1) to last frame's pixel, see the shader.
++        struct MotionBlurParams {
++            bool valid = false;
++            float reproject[16] = {};
++            float wColumn[4] = {};
++            float offset[4] = {};
++            float depthMax = 1.0f;
++        };
++
+         struct Framebuffer {
+             std::unique_ptr<RenderBuffer> paramsBuffer;
+             std::unique_ptr<FramebufferRendererDescriptorFramebufferSet> descRealFbSet;
+@@ -127,8 +136,32 @@ namespace RT64 {
+             int32_t crackFillWideRadius = 3;
+             float resolutionScale = 1.0f;
+             float dofStart = 0.0f, dofM22 = 0.0f, dofM32 = 0.0f, dofVpScaleZ = 0.5f, dofVpTranslateZ = 0.5f;
++            bool scene3D = false; // the race view's 3D scene (depth of field or motion blur applies)
++            MotionBlurParams motion;
+         };
+ 
++        // The race camera's last two frames (view-projection and position).
++        struct MotionFrame {
++            bool valid = false;
++            hlslpp::float4x4 viewProj;
++            hlslpp::float4x4 view;
++            double camera[3] = {};
++        };
++
++        MotionFrame motionCur, motionPrev;
++        std::unique_ptr<MotionBlurDescriptorSet> motionBlurSet;
++        const RenderTexture *motionBlurSetColor = nullptr;
++        const RenderTexture *motionBlurSetDepth = nullptr;
++        const RenderTexture *motionBlurSetScene = nullptr;
++        // The depth after the first 3D pass (the track, before the cars).
++        std::unique_ptr<RenderTexture> sceneDepthCopy;
++        std::unique_ptr<RenderTextureView> sceneDepthCopyView;
++        uint32_t sceneDepthWidth = 0;
++        uint32_t sceneDepthHeight = 0;
++        uint32_t sceneDepthSamples = 0;
++        RenderFormat sceneDepthFormat = RenderFormat::UNKNOWN;
++        void drawMotionBlur(RenderWorker *worker, RenderTarget *colorTarget, RenderTarget *depthTarget, float resolutionScale, const MotionBlurParams &params);
++
+         // Depth of field (GT64, DofPS.hlsl): applied to the last colour target the crack fill ran on, once the next
+         // framebuffer drawn isn't another 3D one on it (the HUD comes after the track and the cars, and stays sharp).
+         struct PendingDof {
+@@ -136,6 +169,7 @@ namespace RT64 {
+             RenderTarget *depthTarget = nullptr;
+             float resolutionScale = 1.0f;
+             float start = 0.0f, m22 = 0.0f, m32 = 0.0f, vpScaleZ = 0.5f, vpTranslateZ = 0.5f;
++            MotionBlurParams motion;
+         };
+ 
+         PendingDof pendingDof;
+@@ -182,6 +216,7 @@ namespace RT64 {
+             bool postBlendNoiseNegative;
+             uint32_t maxGameCall;
+         };
++        void computeMotionBlur(const DrawParams &p, uint32_t transformsIndex, const double camera[3], MotionBlurParams &out);
+ 
+         FramebufferRenderer(RenderWorker *worker, bool rtSupport, UserConfiguration::GraphicsAPI graphicsAPI, const ShaderLibrary *shaderLibrary);
+         ~FramebufferRenderer();
+diff --git a/src/render/rt64_shader_library.cpp b/src/render/rt64_shader_library.cpp
+index d4e300c..80195dd 100644
+--- a/src/render/rt64_shader_library.cpp
++++ b/src/render/rt64_shader_library.cpp
+@@ -42,12 +42,16 @@
+ #include "shaders/TextureCopyPS.hlsl.spirv.h"
+ #include "shaders/CrackFillPS.hlsl.spirv.h"
+ #include "shaders/DofPS.hlsl.spirv.h"
++#include "shaders/MotionBlurPS.hlsl.spirv.h"
+ #include "shaders/CrackFill2XPS.hlsl.spirv.h"
+ #include "shaders/Dof2XPS.hlsl.spirv.h"
++#include "shaders/MotionBlur2XPS.hlsl.spirv.h"
+ #include "shaders/CrackFill4XPS.hlsl.spirv.h"
+ #include "shaders/Dof4XPS.hlsl.spirv.h"
++#include "shaders/MotionBlur4XPS.hlsl.spirv.h"
+ #include "shaders/CrackFill8XPS.hlsl.spirv.h"
+ #include "shaders/Dof8XPS.hlsl.spirv.h"
++#include "shaders/MotionBlur8XPS.hlsl.spirv.h"
+ #include "shaders/TextureDecodeCS.hlsl.spirv.h"
+ #include "shaders/TextureResolveSamples2XPS.hlsl.spirv.h"
+ #include "shaders/TextureResolveSamples4XPS.hlsl.spirv.h"
+@@ -96,12 +100,16 @@
+ #   include "shaders/TextureCopyPS.hlsl.dxil.h"
+ #   include "shaders/CrackFillPS.hlsl.dxil.h"
+ #   include "shaders/DofPS.hlsl.dxil.h"
++#   include "shaders/MotionBlurPS.hlsl.dxil.h"
+ #   include "shaders/CrackFill2XPS.hlsl.dxil.h"
+ #   include "shaders/Dof2XPS.hlsl.dxil.h"
++#   include "shaders/MotionBlur2XPS.hlsl.dxil.h"
+ #   include "shaders/CrackFill4XPS.hlsl.dxil.h"
+ #   include "shaders/Dof4XPS.hlsl.dxil.h"
++#   include "shaders/MotionBlur4XPS.hlsl.dxil.h"
+ #   include "shaders/CrackFill8XPS.hlsl.dxil.h"
+ #   include "shaders/Dof8XPS.hlsl.dxil.h"
++#   include "shaders/MotionBlur8XPS.hlsl.dxil.h"
+ #   include "shaders/TextureDecodeCS.hlsl.dxil.h"
+ #   include "shaders/TextureResolveSamples2XPS.hlsl.dxil.h"
+ #   include "shaders/TextureResolveSamples4XPS.hlsl.dxil.h"
+@@ -149,12 +157,16 @@
+ #   include "shaders/TextureCopyPS.hlsl.metal.h"
+ #   include "shaders/CrackFillPS.hlsl.metal.h"
+ #   include "shaders/DofPS.hlsl.metal.h"
++#   include "shaders/MotionBlurPS.hlsl.metal.h"
+ #   include "shaders/CrackFill2XPS.hlsl.metal.h"
+ #   include "shaders/Dof2XPS.hlsl.metal.h"
++#   include "shaders/MotionBlur2XPS.hlsl.metal.h"
+ #   include "shaders/CrackFill4XPS.hlsl.metal.h"
+ #   include "shaders/Dof4XPS.hlsl.metal.h"
++#   include "shaders/MotionBlur4XPS.hlsl.metal.h"
+ #   include "shaders/CrackFill8XPS.hlsl.metal.h"
+ #   include "shaders/Dof8XPS.hlsl.metal.h"
++#   include "shaders/MotionBlur8XPS.hlsl.metal.h"
+ #   include "shaders/TextureDecodeCS.hlsl.metal.h"
+ #   include "shaders/TextureResolveSamples2XPS.hlsl.metal.h"
+ #   include "shaders/TextureResolveSamples4XPS.hlsl.metal.h"
+@@ -635,6 +647,27 @@ namespace RT64 {
+             dofMS.pipelineLayout = layoutBuilder.create(device);
+         }
+ 
++        // Motion blur (GT64): colour copy, depth and the depth before the cars.
++        {
++            MotionBlurDescriptorSet descriptorSet;
++            layoutBuilder.begin();
++            layoutBuilder.addPushConstant(0, 0, sizeof(int32_t) * 32, RenderShaderStageFlag::PIXEL);
++            layoutBuilder.addDescriptorSet(descriptorSet);
++            layoutBuilder.end();
++            motionBlur.pipelineLayout = layoutBuilder.create(device);
++
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(MotionBlurPSBlobDXIL, MotionBlurPSBlobSPIRV, MotionBlurPSBlobMSL, "PSMain", shaderFormat));
++            RenderGraphicsPipelineDesc pipelineDesc;
++            pipelineDesc.pipelineLayout = motionBlur.pipelineLayout.get();
++            pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
++            pipelineDesc.renderTargetFormat[0] = RenderTarget::colorBufferFormat(usesHDR);
++            pipelineDesc.renderTargetCount = 1;
++            pipelineDesc.vertexShader = fullScreenVertexShader.get();
++            pipelineDesc.pixelShader = pixelShader.get();
++            motionBlur.pipeline = device->createGraphicsPipeline(pipelineDesc);
++            motionBlurMS.pipelineLayout = layoutBuilder.create(device);
++        }
++
+         // Texture Decode.
+         {
+             TextureDecodeDescriptorSet descriptorSet;
+@@ -706,8 +739,10 @@ namespace RT64 {
+         const void *RtCopyDepthToColorPSMSBlob = nullptr;
+         const void *CrackFillPSMSBlob = nullptr;
+         const void *DofPSMSBlob = nullptr;
++        const void *MotionBlurPSMSBlob = nullptr;
+         uint32_t CrackFillPSMSBlobSize = 0;
+         uint32_t DofPSMSBlobSize = 0;
++        uint32_t MotionBlurPSMSBlobSize = 0;
+         const void *RtCopyColorToDepthPSBlob = nullptr;
+         const void *RtCopyColorToDepthPSMSBlob = nullptr;
+         uint32_t TextureResolvePSBlobSize = 0;
+@@ -730,8 +765,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobDXIL);
+                 CrackFillPSMSBlob = CrackFill2XPSBlobDXIL;
+                 DofPSMSBlob = Dof2XPSBlobDXIL;
++                MotionBlurPSMSBlob = MotionBlur2XPSBlobDXIL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobDXIL);
+                 DofPSMSBlobSize = std::size(Dof2XPSBlobDXIL);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur2XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobDXIL);
+                 break;
+@@ -742,8 +779,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobDXIL);
+                 CrackFillPSMSBlob = CrackFill4XPSBlobDXIL;
+                 DofPSMSBlob = Dof4XPSBlobDXIL;
++                MotionBlurPSMSBlob = MotionBlur4XPSBlobDXIL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobDXIL);
+                 DofPSMSBlobSize = std::size(Dof4XPSBlobDXIL);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur4XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobDXIL);
+                 break;
+@@ -754,8 +793,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobDXIL);
+                 CrackFillPSMSBlob = CrackFill8XPSBlobDXIL;
+                 DofPSMSBlob = Dof8XPSBlobDXIL;
++                MotionBlurPSMSBlob = MotionBlur8XPSBlobDXIL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobDXIL);
+                 DofPSMSBlobSize = std::size(Dof8XPSBlobDXIL);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur8XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobDXIL);
+                 break;
+@@ -778,8 +819,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobMSL);
+                 CrackFillPSMSBlob = CrackFill2XPSBlobMSL;
+                 DofPSMSBlob = Dof2XPSBlobMSL;
++                MotionBlurPSMSBlob = MotionBlur2XPSBlobMSL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobMSL);
+                 DofPSMSBlobSize = std::size(Dof2XPSBlobMSL);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur2XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobMSL);
+                 break;
+@@ -790,8 +833,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobMSL);
+                 CrackFillPSMSBlob = CrackFill4XPSBlobMSL;
+                 DofPSMSBlob = Dof4XPSBlobMSL;
++                MotionBlurPSMSBlob = MotionBlur4XPSBlobMSL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobMSL);
+                 DofPSMSBlobSize = std::size(Dof4XPSBlobMSL);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur4XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobMSL);
+                 break;
+@@ -802,8 +847,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobMSL);
+                 CrackFillPSMSBlob = CrackFill8XPSBlobMSL;
+                 DofPSMSBlob = Dof8XPSBlobMSL;
++                MotionBlurPSMSBlob = MotionBlur8XPSBlobMSL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobMSL);
+                 DofPSMSBlobSize = std::size(Dof8XPSBlobMSL);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur8XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobMSL);
+                 break;
+@@ -825,8 +872,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobSPIRV);
+                 CrackFillPSMSBlob = CrackFill2XPSBlobSPIRV;
+                 DofPSMSBlob = Dof2XPSBlobSPIRV;
++                MotionBlurPSMSBlob = MotionBlur2XPSBlobSPIRV;
+                 CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobSPIRV);
+                 DofPSMSBlobSize = std::size(Dof2XPSBlobSPIRV);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur2XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobSPIRV);
+                 break;
+@@ -837,8 +886,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobSPIRV);
+                 CrackFillPSMSBlob = CrackFill4XPSBlobSPIRV;
+                 DofPSMSBlob = Dof4XPSBlobSPIRV;
++                MotionBlurPSMSBlob = MotionBlur4XPSBlobSPIRV;
+                 CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobSPIRV);
+                 DofPSMSBlobSize = std::size(Dof4XPSBlobSPIRV);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur4XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobSPIRV);
+                 break;
+@@ -849,8 +900,10 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobSPIRV);
+                 CrackFillPSMSBlob = CrackFill8XPSBlobSPIRV;
+                 DofPSMSBlob = Dof8XPSBlobSPIRV;
++                MotionBlurPSMSBlob = MotionBlur8XPSBlobSPIRV;
+                 CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobSPIRV);
+                 DofPSMSBlobSize = std::size(Dof8XPSBlobSPIRV);
++                MotionBlurPSMSBlobSize = std::size(MotionBlur8XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobSPIRV);
+                 break;
+@@ -939,6 +992,19 @@ namespace RT64 {
+                 dofMS.pipeline = device->createGraphicsPipeline(dofDesc);
+             }
+ 
++            if ((MotionBlurPSMSBlob != nullptr) && (motionBlurMS.pipelineLayout != nullptr)) {
++                std::unique_ptr<RenderShader> motionBlurMSShader = device->createShader(MotionBlurPSMSBlob, MotionBlurPSMSBlobSize, "PSMain", shaderFormat);
++                RenderGraphicsPipelineDesc motionBlurDesc;
++                motionBlurDesc.pipelineLayout = motionBlurMS.pipelineLayout.get();
++                motionBlurDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
++                motionBlurDesc.renderTargetFormat[0] = RenderTarget::colorBufferFormat(usesHDR);
++                motionBlurDesc.renderTargetCount = 1;
++                motionBlurDesc.vertexShader = fullScreenVertexShader.get();
++                motionBlurDesc.pixelShader = motionBlurMSShader.get();
++                motionBlurDesc.multisampling = multisampling;
++                motionBlurMS.pipeline = device->createGraphicsPipeline(motionBlurDesc);
++            }
++
+             if (RtCopyDepthToColorPSMSBlob != nullptr) {
+                 std::unique_ptr<RenderShader> depthToColorMSShader = device->createShader(RtCopyDepthToColorPSMSBlob, RtCopyDepthToColorPSMSBlobSize, "PSMain", shaderFormat);
+                 pipelineDesc.pixelShader = depthToColorMSShader.get();
+diff --git a/src/render/rt64_shader_library.h b/src/render/rt64_shader_library.h
+index 0576bb6..7977165 100644
+--- a/src/render/rt64_shader_library.h
++++ b/src/render/rt64_shader_library.h
+@@ -57,6 +57,8 @@ namespace RT64 {
+         ShaderRecord crackFillMS;
+         ShaderRecord dof;
+         ShaderRecord dofMS;
++        ShaderRecord motionBlur;
++        ShaderRecord motionBlurMS;
+         ShaderRecord textureResolve;
+         ShaderRecord videoInterfaceLinear;
+         ShaderRecord videoInterfaceNearest;
+diff --git a/src/shaders/MotionBlurPS.hlsl b/src/shaders/MotionBlurPS.hlsl
+new file mode 100644
+index 0000000..94ad9c5
+--- /dev/null
++++ b/src/shaders/MotionBlurPS.hlsl
+@@ -0,0 +1,171 @@
++//
++// RT64
++//
++
++// Camera motion blur (GT64): each pixel of the scene is put back where it was on screen in the game's last frame (from
++// its depth, the camera's movement and both frames' view-projections) and blurred along the way it moved, over the
++// shutter's share of it. The cars, drawn after the track (they're nearer than the depth that was there before them),
++// move with the camera and stay sharp; nor do they smear into what's around them. Seams in the track the crack fill
++// left (the sky showing through, at the cleared depth) are blurred over from the track around them, not spread into it.
++
++struct MotionBlurCB {
++    // Pixel (x, y, depth, 1) -> last frame's homogeneous pixel position: (q * reproject) / dot(q, wColumn) + offset.
++    float4 reproject[4];
++    float4 wColumn;
++    float4 offset;
++    int2 size;
++    float shutter;      // share of a game frame's movement blurred over
++    float maxLength;    // longest blur in pixels
++    float depthMax;     // depths past this (the cleared sky) are taken as this: past the far plane's
++    int debug;
++    int gapRadius;      // seams in the track up to this many pixels across (nothing drawn there: the sky showing through)
++    int pad1;
++};
++
++[[vk::push_constant]] ConstantBuffer<MotionBlurCB> gConstants : register(b0);
++
++#if defined(SAMPLES_8X)
++#   define SAMPLE_COUNT 8
++#elif defined(SAMPLES_4X)
++#   define SAMPLE_COUNT 4
++#elif defined(SAMPLES_2X)
++#   define SAMPLE_COUNT 2
++#endif
++
++#ifdef SAMPLE_COUNT
++Texture2DMS<float4> gColor : register(t1);
++Texture2DMS<float> gDepth : register(t2);
++Texture2DMS<float> gSceneDepth : register(t3);
++
++float minDepth(Texture2DMS<float> tex, int2 p) {
++    float d = 1.0f;
++    for (uint i = 0; i < SAMPLE_COUNT; i++) {
++        d = min(d, tex.Load(p, i));
++    }
++
++    return d;
++}
++
++float depthAt(int2 p) {
++    return minDepth(gDepth, clamp(p, int2(0, 0), gConstants.size - 1));
++}
++
++float sceneDepthAt(int2 p) {
++    return minDepth(gSceneDepth, clamp(p, int2(0, 0), gConstants.size - 1));
++}
++
++float4 colorAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    float4 c = float4(0.0f, 0.0f, 0.0f, 0.0f);
++    for (uint i = 0; i < SAMPLE_COUNT; i++) {
++        c += gColor.Load(p, i);
++    }
++
++    return c / float(SAMPLE_COUNT);
++}
++#else
++Texture2D<float4> gColor : register(t1);
++Texture2D<float> gDepth : register(t2);
++Texture2D<float> gSceneDepth : register(t3);
++
++float depthAt(int2 p) {
++    return gDepth.Load(int3(clamp(p, int2(0, 0), gConstants.size - 1), 0));
++}
++
++float sceneDepthAt(int2 p) {
++    return gSceneDepth.Load(int3(clamp(p, int2(0, 0), gConstants.size - 1), 0));
++}
++
++float4 colorAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    return gColor.Load(int3(p, 0));
++}
++#endif
++
++// Drawn after the track: a car (or something else that moves with the camera).
++bool isCar(int2 p, float depth) {
++    return depth < sceneDepthAt(p) - 1e-6f;
++}
++
++float4 rowTimes(float4 q, float4 m[4]) {
++    return q.x * m[0] + q.y * m[1] + q.z * m[2] + q.w * m[3];
++}
++
++#define TAP_COUNT 16
++
++bool isSky(float depth) {
++    return depth > gConstants.depthMax;
++}
++
++float4 PSMain(in float4 pos : SV_Position, in float2 uv : TEXCOORD0) : SV_TARGET {
++    const int2 p = int2(pos.xy);
++    float depth = depthAt(p);
++    if (isCar(p, depth)) {
++        if (gConstants.debug != 0) {
++            return float4(0.0f, 0.0f, 1.0f, 1.0f);
++        }
++
++        discard;
++    }
++
++    // Nothing drawn here, but the track above and below (or left and right) of it: a seam. It moves with the track.
++    bool seam = false;
++    if (isSky(depth)) {
++        for (int axis = 0; (axis < 2) && !seam; axis++) {
++            const int2 dir = (axis == 0) ? int2(0, 1) : int2(1, 0);
++            float da = 1.0f;
++            float db = 1.0f;
++            for (int k = 1; k <= gConstants.gapRadius; k++) {
++                if (isSky(da)) {
++                    da = depthAt(p - dir * k);
++                }
++
++                if (isSky(db)) {
++                    db = depthAt(p + dir * k);
++                }
++            }
++
++            if (!isSky(da) && !isSky(db)) {
++                seam = true;
++                depth = max(da, db);
++            }
++        }
++    }
++
++    const float4 q = float4(pos.xy, min(depth, gConstants.depthMax), 1.0f);
++    const float4 prev = rowTimes(q, gConstants.reproject) / dot(q, gConstants.wColumn) + gConstants.offset;
++    float2 motion = (prev.w > 0.0f) ? (pos.xy - prev.xy / prev.w) * gConstants.shutter : float2(0.0f, 0.0f);
++    const float len = sqrt(dot(motion, motion));
++    if (!(len <= gConstants.maxLength)) {
++        motion = (len > 0.0f) ? (motion * (gConstants.maxLength / len)) : float2(0.0f, 0.0f);
++    }
++
++    if (gConstants.debug != 0) {
++        return float4(saturate(0.5f + motion / (2.0f * gConstants.maxLength)), 0.0f, 1.0f);
++    }
++
++    if (!seam && (dot(motion, motion) < 0.25f)) {
++        discard;
++    }
++
++    // Taps across the movement, centred on the pixel. Ones on a car are left out, and on the track so are ones where
++    // nothing was drawn (seams, the sky past the end of it); a seam leaves out itself too.
++    const bool onTrack = !isSky(depth);
++    float4 sum = seam ? float4(0.0f, 0.0f, 0.0f, 0.0f) : colorAt(p);
++    float weight = seam ? 0.0f : 1.0f;
++    for (int i = 0; i < TAP_COUNT; i++) {
++        const float t = (float(i) + 0.5f) / float(TAP_COUNT) - 0.5f;
++        const int2 s = int2(round(pos.xy + motion * t - 0.5f));
++        const float sd = depthAt(s);
++        if (!isCar(s, sd) && !(onTrack && isSky(sd))) {
++            sum += colorAt(s);
++            weight += 1.0f;
++        }
++    }
++
++    if (weight == 0.0f) {
++        discard;
++    }
++
++    return sum / weight;
++}

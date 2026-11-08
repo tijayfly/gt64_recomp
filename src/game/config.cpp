@@ -140,6 +140,26 @@ static void add_depth_of_field_option(recomp::config::Config &config) {
     );
 }
 
+static void add_motion_blur_option(recomp::config::Config &config) {
+    using EnumOptionVector = const std::vector<recomp::config::ConfigOptionEnumOption>;
+    static EnumOptionVector motion_blur_options = {
+        {gt::MotionBlur::Off, "Off", "Off"},
+        {gt::MotionBlur::On, "On", "On"},
+    };
+    config.add_enum_option(
+        gt::configkeys::graphics::motion_blur,
+        "Motion Blur",
+        "<recomp-color primary>On</recomp-color> blurs the track and scenery in races as the camera moves past them; the cars "
+        "stay sharp. <recomp-color primary>Off</recomp-color> keeps it all sharp.",
+        motion_blur_options,
+        gt::MotionBlur::On
+    );
+}
+
+gt::MotionBlur gt::get_motion_blur() {
+    return get_graphics_config_enum_value<gt::MotionBlur>(gt::configkeys::graphics::motion_blur);
+}
+
 gt::DepthOfField gt::get_depth_of_field() {
     return get_graphics_config_enum_value<gt::DepthOfField>(gt::configkeys::graphics::depth_of_field);
 }
@@ -215,6 +235,7 @@ void gt::init_config() {
     add_draw_distance_option(graphics_config);
     add_hd_wheels_option(graphics_config);
     add_depth_of_field_option(graphics_config);
+    add_motion_blur_option(graphics_config);
 
     set_control_defaults();
     set_control_descriptions();
