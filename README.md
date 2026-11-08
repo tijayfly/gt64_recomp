@@ -79,6 +79,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **HD wheels.** Graphics > HD Wheels (on by default): the cars' six-sided wheels are replaced with modelled ones,
   round tyres and five-spoke alloy rims. *Off* keeps the original wheels.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black, in races and the intro.
+- **Hardware-era shortcuts fixed.** Opponents keep their wheels and shadows instead of switching them on and off
+  with distance, and wheels no longer show a stale position for a frame when they reappear.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Uncapped framerate.** Graphics > Framerate: *Display* runs races at the display's refresh rate (60, 120, 144 Hz
   and up), *Manual* at a rate you set, *Original* at the game's 30 FPS. The extra frames are drawn between the game's
