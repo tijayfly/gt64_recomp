@@ -75,7 +75,7 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Depth of field.** Graphics > Depth of Field (on by default): with an extended draw distance, the distance blurs
   past where the original draw distance ended.
 - **Motion blur.** Graphics > Motion Blur (on by default): in races, the track and scenery blur as the camera moves
-  past them. The cars stay sharp.
+  past them. The cars stay sharp. Off while Refresh Rate is *Original*.
 - **HD wheels.** Graphics > HD Wheels (on by default): the cars' six-sided wheels are replaced with modelled ones,
   round tyres and five-spoke alloy rims. *Off* keeps the original wheels.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black, in races and the intro.
