@@ -72,7 +72,9 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   Extended and Maximum also draw the most detailed track models at any distance, move the far plane out with fog and
   weather left where they were, and draw scenery at the edges of the widescreen view, which the game culled with a
   view cone sized for 4:3.
-- **Softer car shadows.** Filtered and blended at about half strength instead of solid black.
+- **HD wheels.** Graphics > HD Wheels (on by default): the cars' six-sided wheels are replaced with modelled ones,
+  round tyres and five-spoke alloy rims. *Off* keeps the original wheels.
+- **Softer car shadows.** Filtered and blended at about half strength instead of solid black, in races and the intro.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Uncapped framerate.** Graphics > Refresh Rate: *Display* runs races at the display's refresh rate (60, 120, 144 Hz
   and up), *Manual* at a rate you set, *Original* at the game's 30 FPS. The extra frames are drawn between the game's
@@ -195,7 +197,7 @@ stretch), `GT_CARD_BOX_Y=y0,y1` (override the 2D box), `GT_NO_CRACK_FILL` / `GT_
 fill / show what it fills in magenta), `GT_DEPTH_VIEW` (show depth as grey, for tuning the fill), `GT_NO_SHADOW_FIX`,
 `GT_KEEP_WINDOW_BOX` (keep the credits' translucent box), `GT_PEDAL_TEST=<0..1>` (stand-in trigger amount while A is
 held) / `GT_PEDAL_LOG` (pedal and speed), `GT_REPLAY_LOG` (replay pedal recording and playback), `GT_RUMBLE_LOG`
-(pak probes, motor on and off, slip rumble), `GT_PAK_LOG` (Controller Pak calls and save requests), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s). `GT_INTERP_HALF=<0..1>` draws every frame that far back
+(pak probes, motor on and off, slip rumble), `GT_WHEEL_LOG` (wheels found and replaced), `GT_PAK_LOG` (Controller Pak calls and save requests), `GT_CULL_LOG` (Extended's object reach per track), `GT_AR_RESET_TEST` (re-apply the saved aspect ratio every 5 s). `GT_INTERP_HALF=<0..1>` draws every frame that far back
 toward the previous one (tests the frame matching headless, where the refresh rate can't be raised), `GT_CUT_LOG`
 (camera cuts left uninterpolated), `GT_INTERP_LOG` (once a second: frames matched and interpolated, matching time and
 how long RT64's threads waited on each other).
