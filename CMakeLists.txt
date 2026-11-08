@@ -151,6 +151,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # Depth of field: past where the next shorter draw distance would end, the race view blurs (a gather pass on the 3D
 # scene's colour and depth before the HUD). The game sets the distance; the extended projection turns depth back into it.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-depth-of-field.patch)
+# Motion blur: the race view blurred along how far each pixel moved on screen since the last frame (from its depth, the
+# camera's movement, which the game reports, and both frames' view-projections); the cars, drawn after the track, stay sharp.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-motion-blur.patch)
 
 apply_dependency_patches()
 

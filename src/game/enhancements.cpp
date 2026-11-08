@@ -99,7 +99,7 @@ extern "C" void gt_debug_swap(uint32_t fb) {
 #include "ultramodern/config.hpp"
 #include "gt_game.h"
 
-namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); void setFarScale(float scale); void setOriginalRateOnly(bool enabled); void setDofStart(float distance); }
+namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool enabled); void setCardRemapBox(int32_t x0, int32_t y0, int32_t x1, int32_t y1); void setRaceHoleFill(bool enabled); void setOutputBrightness(float brightness); void setFarScale(float scale); void setOriginalRateOnly(bool enabled); void setDofStart(float distance); void setMotionCamera(double x, double y, double z, bool valid); }
 namespace {
     double section_spacing(uint8_t* rdram);
     extern int32_t original_ahead;
@@ -265,6 +265,9 @@ void gt::widescreen_on_vi() {
         dof_start = float(section_spacing(rdram) * original_ahead);
     }
     RT64::setDofStart(dof_start);
+    if (!track_drawn) {
+        RT64::setMotionCamera(0.0, 0.0, 0.0, false);
+    }
     // Into a race, the game cross-fades from the last 4:3 frame (the start card) to the race, so switching the aspect
     // ratio as the race appears stretched the card for a moment. Fade the output through black instead: fade out
     // (still pillarboxed) as the card ends, hold black through loading until the race mode has begun and the
@@ -775,6 +778,14 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
 
 extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
     original_ahead = count;
+    // Motion blur: the camera's position (*D_8010FFCC + 0xD8, doubles; the track is drawn relative to it, the view matrix
+    // only turns), for RT64 to tell how far the scene moved since the last frame. Not in split screen.
+    {
+        const uint32_t cam = rd32(rdram, 0x8010FFCCu);
+        const bool valid = (gt::get_motion_blur() == gt::MotionBlur::On) && (views_this_frame <= 1) && (views_last_frame <= 1) &&
+            (cam >= 0x80000000u) && (cam < 0x80800000u);
+        RT64::setMotionCamera(valid ? rd64f(rdram, cam + 0xD8) : 0.0, valid ? rd64f(rdram, cam + 0xE0) : 0.0, valid ? rd64f(rdram, cam + 0xE8) : 0.0, valid);
+    }
     if (!extended_draw_distance()) {
         return count;
     }

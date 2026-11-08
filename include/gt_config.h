@@ -10,6 +10,7 @@ namespace gt {
             inline const std::string draw_distance = "draw_distance";
             inline const std::string hd_wheels = "hd_wheels";
             inline const std::string depth_of_field = "depth_of_field";
+            inline const std::string motion_blur = "motion_blur";
         }
         namespace general {
             inline const std::string analog_triggers = "analog_triggers";
@@ -51,7 +52,12 @@ namespace gt {
 
     enum class DepthOfField {
         Off,
-        On, // blur the distance past the next shorter draw distance's reach (Extended and Maximum only)
+        On, // blur the distance past the original draw distance's reach (Extended and Maximum only)
+    };
+
+    enum class MotionBlur {
+        Off,
+        On, // blur the race view along the camera's motion (the cars stay sharp)
     };
 
     void init_config();
@@ -62,6 +68,7 @@ namespace gt {
     DrawDistance get_draw_distance();
     HdWheels get_hd_wheels();
     DepthOfField get_depth_of_field();
+    MotionBlur get_motion_blur();
 }
 
 #endif
