@@ -1,0 +1,64 @@
+diff --git a/src/hle/rt64_interpreter.cpp b/src/hle/rt64_interpreter.cpp
+index 99e46ae..e50ce66 100644
+--- a/src/hle/rt64_interpreter.cpp
++++ b/src/hle/rt64_interpreter.cpp
+@@ -37,8 +37,12 @@ namespace RT64 {
+                 state->rsp->setGBI(hleGBI);
+             }
+ 
+-            UCode.textAddress = maskedTextAddress;
+-            UCode.dataAddress = maskedDataAddress;
++            // Not recognised (the microcode's data may not be in RDRAM yet): look again on the next load.
++            UCode.textAddress = (hleGBI != nullptr) ? maskedTextAddress : 0;
++            UCode.dataAddress = (hleGBI != nullptr) ? maskedDataAddress : 0;
++            if (hleGBI == nullptr) {
++                fprintf(stderr, "[rt64] unknown microcode (text 0x%06X, data 0x%06X)\n", maskedTextAddress, maskedDataAddress);
++            }
+         }
+ 
+         // GT64's card remap (rt64_vi.h) applies to its 2D tasks only.
+@@ -168,12 +172,44 @@ namespace RT64 {
+         // Check RDRAM if required.
+         state->checkRDRAM();
+ 
++        // No GBI for the task's microcode (seen in GT64 coming back from qualifying): skip the task instead of crashing.
++        if (hleGBI == nullptr) {
++            fprintf(stderr, "[rt64] task 0x%08X skipped: unknown microcode\n", dlStartAdddress);
++            state->dlCpuProfiler.end();
++            return;
++        }
++
+         // Run the command interpreter.
+         DisplayList *dl = dlStart;
+         uint8_t opCode;
+         GBIFunction func;
++        // A display list that runs (or jumps) off the end of RDRAM stops the task instead of crashing: GT64 sometimes
++        // submits one with stale segments coming back from qualifying. GT_DL_LOG=1 prints its last commands.
++        static const bool dlLog = (getenv("GT_DL_LOG") != nullptr);
++        const uint8_t *rdramEnd = state->RDRAM + RDRAMSize + 1 - sizeof(DisplayList);
++        uint32_t ringW0[16] = {}, ringW1[16] = {}, ringAddr[16] = {};
++        uint32_t ringPos = 0;
+         while (dl != nullptr) {
++            if ((reinterpret_cast<const uint8_t *>(dl) < state->RDRAM) || (reinterpret_cast<const uint8_t *>(dl) > rdramEnd)) {
++                fprintf(stderr, "[rt64] display list of task 0x%08X left RDRAM (offset 0x%llX), task stopped\n", dlStartAdddress,
++                    (long long)(reinterpret_cast<const uint8_t *>(dl) - state->RDRAM));
++                if (dlLog) {
++                    for (uint32_t k = 0; k < 16; k++) {
++                        const uint32_t r = (ringPos + k) & 15;
++                        fprintf(stderr, "[rt64]   %08X: %08X %08X\n", ringAddr[r], ringW0[r], ringW1[r]);
++                    }
++                }
++
++                break;
++            }
++
+             opCode = (dl->w0 >> 24);
++            if (dlLog) {
++                ringW0[ringPos & 15] = dl->w0;
++                ringW1[ringPos & 15] = dl->w1;
++                ringAddr[ringPos & 15] = uint32_t(reinterpret_cast<const uint8_t *>(dl) - state->RDRAM);
++                ringPos++;
++            }
+ 
+             if ((extendedOpCode != 0) && (opCode == extendedOpCode)) {
+                 extendedFunction(state, &dl);

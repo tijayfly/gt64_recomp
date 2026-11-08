@@ -154,6 +154,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # Motion blur: the race view blurred along how far each pixel moved on screen since the last frame (from its depth, the
 # camera's movement, which the game reports, and both frames' view-projections); the cars, drawn after the track, stay sharp.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-motion-blur.patch)
+# A task whose microcode isn't recognised is skipped and the microcode looked up again next time, and a display list that
+# runs off the end of RDRAM stops its task: both crashed coming back from GT64's qualifying.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-display-list-guard.patch)
 
 apply_dependency_patches()
 
