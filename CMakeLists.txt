@@ -157,6 +157,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # A task whose microcode isn't recognised is skipped and the microcode looked up again next time, and a display list that
 # runs off the end of RDRAM stops its task: both crashed coming back from GT64's qualifying.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-display-list-guard.patch)
+# Frame interpolation: parts drawn several times (wheels) aren't paired with one far from where it was expected, so a
+# car's wheels appearing as another's disappear (GT64 draws wheels only near the camera) don't fly across between them.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-interp-repeated-kinds.patch)
 
 apply_dependency_patches()
 

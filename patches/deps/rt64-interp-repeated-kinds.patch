@@ -1,0 +1,25 @@
+diff --git a/src/hle/rt64_game_frame.cpp b/src/hle/rt64_game_frame.cpp
+index 355ecc3..8bf8755 100644
+--- a/src/hle/rt64_game_frame.cpp
++++ b/src/hle/rt64_game_frame.cpp
+@@ -850,6 +850,7 @@ namespace RT64 {
+             return hlslpp::float3(moved.xyz);
+         };
+ 
++        const float MaxShift = 40.0f;
+         for (const MovingKind &moving : movingKinds) {
+             if ((moving.cur.size() == 1) && (moving.prev.size() == 1)) {
+                 continue;
+@@ -867,6 +868,12 @@ namespace RT64 {
+                 const hlslpp::float3 prevPos = viewPos(prevTransform, firstPrevView);
+                 const hlslpp::float3 expected = expectedPos(prevPos);
+                 matchResult.positionDifference = float(hlslpp::length(viewPos(curTransform, firstCurView) - expected));
++                // Far from where it's expected: another one of the kind (GT64 draws a car's wheels only near the camera,
++                // so a car's wheels can appear the frame another's disappear). Left unpaired, it's drawn where it is.
++                if (matchResult.positionDifference > MaxShift) {
++                    return;
++                }
++
+                 matchResult.screenSpaceDifference = FLT_MAX;
+                 matchCandidates.emplace_back(curIndex, prevIndex, matchResult.computeDifference());
+             };
