@@ -73,7 +73,7 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   weather left where they were, and draw scenery at the edges of the widescreen view, which the game culled with a
   view cone sized for 4:3.
 - **Depth of field.** Graphics > Depth of Field (on by default): with an extended draw distance, the distance blurs
-  past where the next shorter draw distance would end (*Extended*: the original's; *Maximum*: Extended's).
+  past where the original draw distance ended.
 - **HD wheels.** Graphics > HD Wheels (on by default): the cars' six-sided wheels are replaced with modelled ones,
   round tyres and five-spoke alloy rims. *Off* keeps the original wheels.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black, in races and the intro.

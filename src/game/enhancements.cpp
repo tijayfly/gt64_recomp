@@ -103,7 +103,6 @@ namespace RT64 { void setCardRemap(bool enabled); void setFullFrameView(bool ena
 namespace {
     double section_spacing(uint8_t* rdram);
     extern int32_t original_ahead;
-    extern int32_t drawn_ahead;
 }
 
 namespace {
@@ -258,15 +257,12 @@ void gt::widescreen_on_vi() {
     }
     const bool track_drawn = (track_view_vi != 0) && (vi_count - track_view_vi <= 4);
     RT64::setFarScale((track_drawn && gt::get_draw_distance() != gt::DrawDistance::Original) ? 16.0f : 1.0f);
-    // Depth of field: past where the next shorter draw distance would end (Extended: the game's own sections ahead;
-    // Maximum: Extended's 20; Maximum drawing Extended's sections, as in split screen, counts as Extended), the picture
-    // blurs.
+    // Depth of field: past where the original draw distance would end (the game's own sections ahead), the picture blurs.
     float dof_start = 0.0f;
     // (A looser test than track_drawn: RT64 only applies it to frames drawn with the extended far plane anyway, and a
     // slow frame shouldn't make it blink.)
     if ((track_view_vi != 0) && (vi_count - track_view_vi <= 60) && gt::get_depth_of_field() == gt::DepthOfField::On && gt::get_draw_distance() != gt::DrawDistance::Original) {
-        const int32_t sections = (drawn_ahead > 20) ? 20 : original_ahead;
-        dof_start = float(section_spacing(rdram) * sections);
+        dof_start = float(section_spacing(rdram) * original_ahead);
     }
     RT64::setDofStart(dof_start);
     // Into a race, the game cross-fades from the last 4:3 frame (the start card) to the race, so switching the aspect
@@ -742,7 +738,6 @@ namespace {
     }
 
     int32_t original_ahead = 0;  // sections the game itself draws ahead (gt_sections_ahead's count)
-    int32_t drawn_ahead = 0;     // and the sections drawn ahead with the draw distance setting
 
     // Sections drawn behind and ahead of the camera's: Extended 10 and 20, Maximum the whole ring (Extended's counts while
     // the game draws more than one view a frame: the whole track several times over is too slow).
@@ -780,14 +775,12 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
 
 extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
     original_ahead = count;
-    drawn_ahead = count;
     if (!extended_draw_distance()) {
         return count;
     }
     int32_t behind, ahead;
     section_counts(rdram, behind, ahead);
-    drawn_ahead = std::max(count, ahead);
-    return drawn_ahead;
+    return std::max(count, ahead);
 }
 
 // func_8000A280, rewritten: append a list node for track section `section` after the pool's last node; past the game's
