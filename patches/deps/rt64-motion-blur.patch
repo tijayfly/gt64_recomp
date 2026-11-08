@@ -137,7 +137,7 @@ index f878f58..9318926 100644
          uint32_t TMEM;
          uint32_t RGBA32;
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index 88f57f7..c41f944 100644
+index 88f57f7..cd8c334 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -1238,7 +1238,7 @@ namespace RT64 {
@@ -275,7 +275,7 @@ index 88f57f7..c41f944 100644
 +            float maxLength;
 +            float depthMax;
 +            int32_t debug;
-+            int32_t pad0;
++            int32_t gapRadius;
 +            int32_t pad1;
 +        } pushConstants;
 +        static_assert(sizeof(pushConstants) == sizeof(int32_t) * 32, "Push constant size");
@@ -288,7 +288,7 @@ index 88f57f7..c41f944 100644
 +        pushConstants.maxLength = maxLength * resolutionScale;
 +        pushConstants.depthMax = params.depthMax;
 +        pushConstants.debug = debug ? 1 : 0;
-+        pushConstants.pad0 = 0;
++        pushConstants.gapRadius = std::max(1, int32_t(std::lround(3.0f * resolutionScale)));
 +        pushConstants.pad1 = 0;
 +
 +        commandList->setFramebuffer(colorTarget->textureFramebuffer.get());
@@ -724,10 +724,10 @@ index 0576bb6..7977165 100644
          ShaderRecord videoInterfaceNearest;
 diff --git a/src/shaders/MotionBlurPS.hlsl b/src/shaders/MotionBlurPS.hlsl
 new file mode 100644
-index 0000000..2cc7cc3
+index 0000000..94ad9c5
 --- /dev/null
 +++ b/src/shaders/MotionBlurPS.hlsl
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,171 @@
 +//
 +// RT64
 +//
@@ -735,7 +735,8 @@ index 0000000..2cc7cc3
 +// Camera motion blur (GT64): each pixel of the scene is put back where it was on screen in the game's last frame (from
 +// its depth, the camera's movement and both frames' view-projections) and blurred along the way it moved, over the
 +// shutter's share of it. The cars, drawn after the track (they're nearer than the depth that was there before them),
-+// move with the camera and stay sharp; nor do they smear into what's around them.
++// move with the camera and stay sharp; nor do they smear into what's around them. Seams in the track the crack fill
++// left (the sky showing through, at the cleared depth) are blurred over from the track around them, not spread into it.
 +
 +struct MotionBlurCB {
 +    // Pixel (x, y, depth, 1) -> last frame's homogeneous pixel position: (q * reproject) / dot(q, wColumn) + offset.
@@ -747,7 +748,7 @@ index 0000000..2cc7cc3
 +    float maxLength;    // longest blur in pixels
 +    float depthMax;     // depths past this (the cleared sky) are taken as this: past the far plane's
 +    int debug;
-+    int pad0;
++    int gapRadius;      // seams in the track up to this many pixels across (nothing drawn there: the sky showing through)
 +    int pad1;
 +};
 +
@@ -822,15 +823,43 @@ index 0000000..2cc7cc3
 +
 +#define TAP_COUNT 16
 +
++bool isSky(float depth) {
++    return depth > gConstants.depthMax;
++}
++
 +float4 PSMain(in float4 pos : SV_Position, in float2 uv : TEXCOORD0) : SV_TARGET {
 +    const int2 p = int2(pos.xy);
-+    const float depth = depthAt(p);
++    float depth = depthAt(p);
 +    if (isCar(p, depth)) {
 +        if (gConstants.debug != 0) {
 +            return float4(0.0f, 0.0f, 1.0f, 1.0f);
 +        }
 +
 +        discard;
++    }
++
++    // Nothing drawn here, but the track above and below (or left and right) of it: a seam. It moves with the track.
++    bool seam = false;
++    if (isSky(depth)) {
++        for (int axis = 0; (axis < 2) && !seam; axis++) {
++            const int2 dir = (axis == 0) ? int2(0, 1) : int2(1, 0);
++            float da = 1.0f;
++            float db = 1.0f;
++            for (int k = 1; k <= gConstants.gapRadius; k++) {
++                if (isSky(da)) {
++                    da = depthAt(p - dir * k);
++                }
++
++                if (isSky(db)) {
++                    db = depthAt(p + dir * k);
++                }
++            }
++
++            if (!isSky(da) && !isSky(db)) {
++                seam = true;
++                depth = max(da, db);
++            }
++        }
 +    }
 +
 +    const float4 q = float4(pos.xy, min(depth, gConstants.depthMax), 1.0f);
@@ -845,20 +874,27 @@ index 0000000..2cc7cc3
 +        return float4(saturate(0.5f + motion / (2.0f * gConstants.maxLength)), 0.0f, 1.0f);
 +    }
 +
-+    if (dot(motion, motion) < 0.25f) {
++    if (!seam && (dot(motion, motion) < 0.25f)) {
 +        discard;
 +    }
 +
-+    // Taps across the movement, centred on the pixel; ones on a car are left out.
-+    float4 sum = colorAt(p);
-+    float weight = 1.0f;
++    // Taps across the movement, centred on the pixel. Ones on a car are left out, and on the track so are ones where
++    // nothing was drawn (seams, the sky past the end of it); a seam leaves out itself too.
++    const bool onTrack = !isSky(depth);
++    float4 sum = seam ? float4(0.0f, 0.0f, 0.0f, 0.0f) : colorAt(p);
++    float weight = seam ? 0.0f : 1.0f;
 +    for (int i = 0; i < TAP_COUNT; i++) {
 +        const float t = (float(i) + 0.5f) / float(TAP_COUNT) - 0.5f;
 +        const int2 s = int2(round(pos.xy + motion * t - 0.5f));
-+        if (!isCar(s, depthAt(s))) {
++        const float sd = depthAt(s);
++        if (!isCar(s, sd) && !(onTrack && isSky(sd))) {
 +            sum += colorAt(s);
 +            weight += 1.0f;
 +        }
++    }
++
++    if (weight == 0.0f) {
++        discard;
 +    }
 +
 +    return sum / weight;
