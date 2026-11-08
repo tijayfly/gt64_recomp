@@ -11,7 +11,7 @@ index 785de27..8890426 100644
          presentQueue->waitForPresentId(state->presentId);
          workloadQueue->waitForIdle();
 diff --git a/src/hle/rt64_game_frame.cpp b/src/hle/rt64_game_frame.cpp
-index 60f45f6..d2311a5 100644
+index 60f45f6..dc96d91 100644
 --- a/src/hle/rt64_game_frame.cpp
 +++ b/src/hle/rt64_game_frame.cpp
 @@ -48,6 +48,12 @@ namespace RT64 {
@@ -214,7 +214,7 @@ index 60f45f6..d2311a5 100644
                      if ((curLookAtIndex < curWorkload.drawData.rspLookAt.size()) && (prevLookAtIndex < prevWorkload.drawData.rspLookAt.size())) {
                          lookAtCheckSet.emplace(curLookAtIndex, prevLookAtIndex);
                      }
-@@ -578,25 +655,147 @@ namespace RT64 {
+@@ -578,25 +655,239 @@ namespace RT64 {
              }
          }
  
@@ -287,6 +287,12 @@ index 60f45f6..d2311a5 100644
 +        thread_local std::vector<uint32_t> prevLeft;
 +        thread_local std::vector<MatchCandidate> matchCandidates;
 +        matchCandidates.clear();
++        struct MovingKind {
++            std::vector<uint32_t> cur;
++            std::vector<uint32_t> prev;
++        };
++        thread_local std::vector<MovingKind> movingKinds;
++        movingKinds.clear();
 +        auto addCandidate = [&](uint32_t curIndex, uint32_t prevIndex) {
 +            const hlslpp::float4x4 &curTransform = curTransforms[curIndex];
 +            const hlslpp::float4x4 &prevTransform = prevTransforms[prevIndex];
@@ -339,7 +345,7 @@ index 60f45f6..d2311a5 100644
 +                }
 +            }
 +
-+            // Moving objects: score the pairs left (or pair them in order where there are too many to compare).
++            // Moving objects: what's left of this kind, paired below.
 +            curLeft.clear();
 +            prevLeft.clear();
 +            for (uint32_t curIndex : curList) {
@@ -354,18 +360,104 @@ index 60f45f6..d2311a5 100644
 +                }
 +            }
 +
++            if (!curLeft.empty() && !prevLeft.empty()) {
++                movingKinds.push_back({ curLeft, prevLeft });
++            }
++        }
++
++        // Moving objects. A kind drawn once in both frames (a car's body) pairs directly, and gives an anchor: how that
++        // part of the picture moved and turned. Kinds drawn several times (wheels: every car's look the same) are scored
++        // by where each was, carried along with the nearest anchor, so a car going past the camera faster than its
++        // wheels are apart still pairs each wheel with itself rather than with the one behind it.
++        struct Anchor {
++            hlslpp::float3 prevPos;
++            hlslpp::float4x4 motion;   // from where a point on it was (view space) to where it is now
++        };
++        thread_local std::vector<Anchor> anchors;
++        anchors.clear();
++        auto viewPos = [](const hlslpp::float4x4 &transform, const hlslpp::float4x4 &view) {
++            return hlslpp::float3(hlslpp::mul(transform[3], view).xyz);
++        };
++
++        for (const MovingKind &moving : movingKinds) {
++            if ((moving.cur.size() != 1) || (moving.prev.size() != 1)) {
++                continue;
++            }
++
++            const uint32_t curIndex = moving.cur[0], prevIndex = moving.prev[0];
++            const RigidBody *prevRigidBody = (firstPrevWorkloadMap != nullptr) ? &firstPrevWorkloadMap->transforms[prevIndex].rigidBody : nullptr;
++            if (!computeTransformMatch(curTransforms[curIndex], firstCurViewProj, prevTransforms[prevIndex], firstPrevViewProj, prevRigidBody).valid) {
++                continue;
++            }
++
++            matchTransform(firstCurWorkload, firstPrevWorkload, firstCurWorkloadMap, firstPrevWorkloadMap, curIndex, prevIndex, modifiedBuffers);
++            const hlslpp::float4x4 prevView = hlslpp::mul(prevTransforms[prevIndex], firstPrevView);
++            const hlslpp::float4x4 curView = hlslpp::mul(curTransforms[curIndex], firstCurView);
++            const float det = float(hlslpp::determinant(prevView));
++            if (fabsf(det) > 1e-12f) {
++                anchors.push_back({ viewPos(prevTransforms[prevIndex], firstPrevView), hlslpp::mul(hlslpp::inverse(prevView), curView) });
++            }
++        }
++
++        const size_t MaxAnchors = 64;
++        const float AnchorReach = 300.0f;
++        // Where a point that was at prevPos (view space) is expected now: carried along by the nearest anchor.
++        auto expectedPos = [&](const hlslpp::float3 &prevPos) {
++            if (anchors.size() > MaxAnchors) {
++                return prevPos;
++            }
++
++            const Anchor *nearest = nullptr;
++            float best = AnchorReach;
++            for (const Anchor &anchor : anchors) {
++                const float d = float(hlslpp::length(anchor.prevPos - prevPos));
++                if (d < best) {
++                    best = d;
++                    nearest = &anchor;
++                }
++            }
++
++            if (nearest == nullptr) {
++                return prevPos;
++            }
++
++            const hlslpp::float4 moved = hlslpp::mul(hlslpp::float4(prevPos, 1.0f), nearest->motion);
++            return hlslpp::float3(moved.xyz);
++        };
++
++        for (const MovingKind &moving : movingKinds) {
++            if ((moving.cur.size() == 1) && (moving.prev.size() == 1)) {
++                continue;
++            }
++
++            auto addShiftedCandidate = [&](uint32_t curIndex, uint32_t prevIndex) {
++                const hlslpp::float4x4 &curTransform = curTransforms[curIndex];
++                const hlslpp::float4x4 &prevTransform = prevTransforms[prevIndex];
++                const RigidBody *prevRigidBody = (firstPrevWorkloadMap != nullptr) ? &firstPrevWorkloadMap->transforms[prevIndex].rigidBody : nullptr;
++                TransformMatchResult matchResult = computeTransformMatch(curTransform, firstCurViewProj, prevTransform, firstPrevViewProj, prevRigidBody);
++                if (!matchResult.valid) {
++                    return;
++                }
++
++                const hlslpp::float3 prevPos = viewPos(prevTransform, firstPrevView);
++                const hlslpp::float3 expected = expectedPos(prevPos);
++                matchResult.positionDifference = float(hlslpp::length(viewPos(curTransform, firstCurView) - expected));
++                matchResult.screenSpaceDifference = FLT_MAX;
++                matchCandidates.emplace_back(curIndex, prevIndex, matchResult.computeDifference());
++            };
++
 +            const size_t MaxPairsPerKind = 1024;
-+            if ((curLeft.size() * prevLeft.size()) <= MaxPairsPerKind) {
-+                for (uint32_t curIndex : curLeft) {
-+                    for (uint32_t prevIndex : prevLeft) {
-+                        addCandidate(curIndex, prevIndex);
++            if ((moving.cur.size() * moving.prev.size()) <= MaxPairsPerKind) {
++                for (uint32_t curIndex : moving.cur) {
++                    for (uint32_t prevIndex : moving.prev) {
++                        addShiftedCandidate(curIndex, prevIndex);
 +                    }
 +                }
 +            }
 +            else {
-+                const size_t count = std::min(curLeft.size(), prevLeft.size());
++                const size_t count = std::min(moving.cur.size(), moving.prev.size());
 +                for (size_t k = 0; k < count; k++) {
-+                    addCandidate(curLeft[k], prevLeft[k]);
++                    addCandidate(moving.cur[k], moving.prev[k]);
 +                }
 +            }
 +        }
@@ -375,7 +467,7 @@ index 60f45f6..d2311a5 100644
          for (const MatchCandidate candidate : matchCandidates) {
              if (firstCurWorkloadMap.transforms[candidate.curIndex].mapped) {
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index a57257c..47b513d 100644
+index 0f767a3..d2ca553 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
 @@ -4,6 +4,8 @@
