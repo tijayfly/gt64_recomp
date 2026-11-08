@@ -123,6 +123,27 @@ static void add_hd_wheels_option(recomp::config::Config &config) {
     );
 }
 
+static void add_depth_of_field_option(recomp::config::Config &config) {
+    using EnumOptionVector = const std::vector<recomp::config::ConfigOptionEnumOption>;
+    static EnumOptionVector depth_of_field_options = {
+        {gt::DepthOfField::Off, "Off", "Off"},
+        {gt::DepthOfField::On, "On", "On"},
+    };
+    config.add_enum_option(
+        gt::configkeys::graphics::depth_of_field,
+        "Depth of Field",
+        "<recomp-color primary>On</recomp-color> blurs the distance past where the original draw distance ended (with "
+        "<recomp-color primary>Extended</recomp-color> or <recomp-color primary>Maximum</recomp-color> draw distance). "
+        "<recomp-color primary>Off</recomp-color> keeps it all sharp.",
+        depth_of_field_options,
+        gt::DepthOfField::On
+    );
+}
+
+gt::DepthOfField gt::get_depth_of_field() {
+    return get_graphics_config_enum_value<gt::DepthOfField>(gt::configkeys::graphics::depth_of_field);
+}
+
 gt::HdWheels gt::get_hd_wheels() {
     return get_graphics_config_enum_value<gt::HdWheels>(gt::configkeys::graphics::hd_wheels);
 }
@@ -193,6 +214,7 @@ void gt::init_config() {
     add_graphics_options(graphics_config);
     add_draw_distance_option(graphics_config);
     add_hd_wheels_option(graphics_config);
+    add_depth_of_field_option(graphics_config);
 
     set_control_defaults();
     set_control_descriptions();

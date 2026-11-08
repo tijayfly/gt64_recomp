@@ -9,6 +9,7 @@ namespace gt {
             inline const std::string frame_rate = "frame_rate";
             inline const std::string draw_distance = "draw_distance";
             inline const std::string hd_wheels = "hd_wheels";
+            inline const std::string depth_of_field = "depth_of_field";
         }
         namespace general {
             inline const std::string analog_triggers = "analog_triggers";
@@ -48,6 +49,11 @@ namespace gt {
         On,  // modelled wheels (round tyres, five-spoke rims) in their place
     };
 
+    enum class DepthOfField {
+        Off,
+        On, // blur the distance past the next shorter draw distance's reach (Extended and Maximum only)
+    };
+
     void init_config();
     FrameRate get_frame_rate();
     AnalogTriggers get_analog_triggers();
@@ -55,6 +61,7 @@ namespace gt {
     SlipRumble get_slip_rumble();
     DrawDistance get_draw_distance();
     HdWheels get_hd_wheels();
+    DepthOfField get_depth_of_field();
 }
 
 #endif

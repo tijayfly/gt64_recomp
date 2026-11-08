@@ -1,0 +1,691 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bb76dbb..991aa92 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -566,6 +566,10 @@ build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl")
+ build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill2XPS.hlsl" "-D SAMPLES_2X")
+ build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill4XPS.hlsl" "-D SAMPLES_4X")
+ build_pixel_shader(  rt64 "src/shaders/CrackFillPS.hlsl" "src/shaders/CrackFill8XPS.hlsl" "-D SAMPLES_8X")
++build_pixel_shader(  rt64 "src/shaders/DofPS.hlsl")
++build_pixel_shader(  rt64 "src/shaders/DofPS.hlsl" "src/shaders/Dof2XPS.hlsl" "-D SAMPLES_2X")
++build_pixel_shader(  rt64 "src/shaders/DofPS.hlsl" "src/shaders/Dof4XPS.hlsl" "-D SAMPLES_4X")
++build_pixel_shader(  rt64 "src/shaders/DofPS.hlsl" "src/shaders/Dof8XPS.hlsl" "-D SAMPLES_8X")
+ build_compute_shader(rt64 "src/shaders/TextureDecodeCS.hlsl")
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples2XPS.hlsl" "-D SAMPLES_2X")
+ build_pixel_shader(  rt64 "src/shaders/TextureResolvePS.hlsl" "src/shaders/TextureResolveSamples4XPS.hlsl" "-D SAMPLES_4X")
+diff --git a/src/hle/rt64_framebuffer_pair.cpp b/src/hle/rt64_framebuffer_pair.cpp
+index c944393..64ea672 100644
+--- a/src/hle/rt64_framebuffer_pair.cpp
++++ b/src/hle/rt64_framebuffer_pair.cpp
+@@ -3,6 +3,7 @@
+ //
+ 
+ #include "rt64_framebuffer_pair.h"
++#include "rt64_vi.h"
+ 
+ #include "shared/rt64_blender.h"
+ 
+@@ -19,6 +20,7 @@ namespace RT64 {
+         gameCallCount = 0;
+         depthRead = false;
+         depthWrite = false;
++        dofStart = 0.0f;
+         syncRequired = false;
+         fillRectOnly = true;
+         ditherPatterns.fill(0);
+@@ -35,6 +37,17 @@ namespace RT64 {
+         auto &proj = projections[projectionCount - 1];
+         proj.addGameCall(gameCall);
+         depthRead = depthRead || gameCall.callDesc.otherMode.zCmp();
++        if ((gameCall.callDesc.otherMode.zUpd() || gameCall.callDesc.otherMode.zCmp()) && (dofStart <= 0.0f)) {
++            float start, m22, m32, vpScaleZ, vpTranslateZ;
++            if (getDofParams(start, m22, m32, vpScaleZ, vpTranslateZ)) {
++                dofStart = start;
++                dofM22 = m22;
++                dofM32 = m32;
++                dofVpScaleZ = vpScaleZ;
++                dofVpTranslateZ = vpTranslateZ;
++            }
++        }
++
+         depthWrite = depthWrite || gameCall.callDesc.otherMode.zUpd();
+         fillRectOnly = fillRectOnly && (proj.type == Projection::Type::Rectangle) && (gameCall.callDesc.otherMode.cycleType() == G_CYC_FILL);
+         gameCallCount++;
+diff --git a/src/hle/rt64_framebuffer_pair.h b/src/hle/rt64_framebuffer_pair.h
+index 60b0fa4..52e7992 100644
+--- a/src/hle/rt64_framebuffer_pair.h
++++ b/src/hle/rt64_framebuffer_pair.h
+@@ -43,6 +43,8 @@ namespace RT64 {
+         uint32_t gameCallCount;
+         bool depthRead;
+         bool depthWrite;
++        // Distance depth of field (GT64), latched from the first depth-tested call: 0 start = off.
++        float dofStart, dofM22, dofM32, dofVpScaleZ, dofVpTranslateZ;
+         bool syncRequired;
+         bool fillRectOnly; // This only applies if there's at least one draw call.
+         std::vector<uint32_t> startFbDiscards;
+diff --git a/src/hle/rt64_rsp.cpp b/src/hle/rt64_rsp.cpp
+index 8dd6793..b7b4122 100644
+--- a/src/hle/rt64_rsp.cpp
++++ b/src/hle/rt64_rsp.cpp
+@@ -168,6 +168,8 @@ namespace RT64 {
+             const float scale = getFarScale();
+             float k = 1.0f, c = 0.0f;
+             farExtended = (scale > 1.0f) && extendFarPlane(floatMatrixIn, scale, floatMatrix, k, c);
++            // Depth of field reads distances with this projection; a projection that isn't extended turns it off.
++            setDofProjection(farExtended ? floatMatrix[2][2] : 0.0f, farExtended ? floatMatrix[3][2] : 0.0f);
+             if (!farExtended) {
+                 floatMatrix = floatMatrixIn;
+                 k = 1.0f;
+@@ -962,6 +964,9 @@ namespace RT64 {
+         viewport.translate.x = float(state->rdp->movedFromOrigin(vp->vtrans[1], ori) + offx) / 4.0f;
+         viewport.translate.y = float(vp->vtrans[0] + offy) / 4.0f;
+         viewport.translate.z = float(vp->vtrans[3]) / DepthRange;
++        if (farExtended) {
++            setDofViewportZ(viewport.scale.z, viewport.translate.z);
++        }
+         extended.viewportOriginStack[viewportStackSize - 1] = ori;
+         viewportChanged = true;
+     }
+diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
+index 4501ed8..f8c76e8 100644
+--- a/src/hle/rt64_vi.cpp
++++ b/src/hle/rt64_vi.cpp
+@@ -63,6 +63,39 @@ namespace RT64 {
+         return farScale.load();
+     }
+ 
++    static std::atomic<float> dofStart{ 0.0f };
++    static std::atomic<float> dofM22{ 0.0f };
++    static std::atomic<float> dofM32{ 0.0f };
++    static std::atomic<float> dofVpScaleZ{ 0.5f };
++    static std::atomic<float> dofVpTranslateZ{ 0.5f };
++
++    void setDofStart(float distance) {
++        dofStart.store(std::max(distance, 0.0f));
++    }
++
++    float getDofStart() {
++        return dofStart.load();
++    }
++
++    void setDofProjection(float m22, float m32) {
++        dofM22.store(m22);
++        dofM32.store(m32);
++    }
++
++    void setDofViewportZ(float scale, float translate) {
++        dofVpScaleZ.store(scale);
++        dofVpTranslateZ.store(translate);
++    }
++
++    bool getDofParams(float &start, float &m22, float &m32, float &vpScaleZ, float &vpTranslateZ) {
++        start = dofStart.load();
++        m22 = dofM22.load();
++        m32 = dofM32.load();
++        vpScaleZ = dofVpScaleZ.load();
++        vpTranslateZ = dofVpTranslateZ.load();
++        return (start > 0.0f) && (m32 < 0.0f) && (vpScaleZ != 0.0f);
++    }
++
+     // GT64 lays out its logos, title and menus in a 288x208 box at (16, 16) inside a black border. While the game sets
+     // this, 2D draws (rectangles and scissors) are remapped so that box fills the 320x240 frame.
+     static std::atomic<bool> cardRemap{ false };
+diff --git a/src/hle/rt64_vi.h b/src/hle/rt64_vi.h
+index 72bc25e..b47632c 100644
+--- a/src/hle/rt64_vi.h
++++ b/src/hle/rt64_vi.h
+@@ -41,6 +41,13 @@ namespace RT64 {
+     bool isRaceHoleFill();
+     void setFarScale(float scale);
+     float getFarScale();
++    // GT64 depth of field: the distance (world units along the view axis) where the blur starts, 0 = off; and the race
++    // camera's extended projection and viewport depth terms it's measured with (set by the RSP).
++    void setDofStart(float distance);
++    float getDofStart();
++    void setDofProjection(float m22, float m32);
++    void setDofViewportZ(float scale, float translate);
++    bool getDofParams(float &start, float &m22, float &m32, float &vpScaleZ, float &vpTranslateZ);
+ 
+     struct VI {
+         union Status {
+diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
+index b140c1c..feb1878 100644
+--- a/src/hle/rt64_workload_queue.cpp
++++ b/src/hle/rt64_workload_queue.cpp
+@@ -820,6 +820,7 @@ namespace RT64 {
+ 
+                     // Do the resolve if using MSAA while target override is active and we're on the correct framebuffer pair index.
+                     if (usingMSAA && (overrideTarget != nullptr) && ((uint32_t)overrideTargetFbPairIndex == f) && (curFrame.workloads[w] == overrideTargetWorkload)) {
++                        framebufferRenderer->flushPendingDof(ext.workloadGraphicsWorker);
+                         overrideTarget->resize(ext.workloadGraphicsWorker, colorTarget->width, colorTarget->height);
+                         overrideTarget->resolveFromTarget(ext.workloadGraphicsWorker, colorTarget, ext.shaderLibrary);
+                     }
+@@ -850,6 +851,11 @@ namespace RT64 {
+                     fbPair.endFbOperations, targetManager, fixedResScale, f, workload.submissionFrame);
+             }
+ 
++            // The depth of field goes on once the frame's last workload has been drawn (the cars come in a later one).
++            if ((w + 1) == curFrame.workloads.size()) {
++                framebufferRenderer->flushPendingDof(ext.workloadGraphicsWorker);
++            }
++
+             ext.workloadGraphicsWorker->commandList->writeTimestamp(queryPool.get(), 1);
+             ext.workloadGraphicsWorker->commandList->end();
+             framebufferRenderer->waitForUploaders();
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+index c5b27bb..88f57f7 100644
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -146,6 +146,7 @@ namespace RT64 {
+         assert(worker != nullptr);
+ 
+         this->shaderLibrary = shaderLibrary;
++        dofAllowed = rtSupport;
+ 
+         frameParams.frameCount = 0;
+         frameParams.viewUbershaders = false;
+@@ -1236,6 +1237,11 @@ namespace RT64 {
+         startBarriers.clear();
+ 
+         const Framebuffer &framebuffer = framebufferVector[framebufferIndex];
++        // Another pass of the 3D scene (the cars after the track) comes before it; anything else (the HUD) after it.
++        if ((pendingDof.colorTarget != nullptr) && ((framebuffer.dofStart <= 0.0f) || (framebuffer.renderTargetDrawCall.fbStorage->colorTarget != pendingDof.colorTarget))) {
++            applyPendingDof(worker);
++        }
++
+         for (RenderTarget *target : framebuffer.transitionRenderTargetSet) {
+             startBarriers.emplace_back(RenderTextureBarrier(target->getResolvedTexture(), RenderTextureLayout::SHADER_READ));
+         }
+@@ -1354,7 +1360,110 @@ namespace RT64 {
+             commandList->setVertexBuffers(0, nullptr, 0, nullptr);
+             commandList->drawInstanced(3, 1, 0, 0);
+             commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_WRITE));
++
++            if (dofAllowed && (framebuffer.dofStart > 0.0f) && (framebuffer.dofM32 < 0.0f) && (framebuffer.dofVpScaleZ != 0.0f)) {
++                pendingDof.colorTarget = colorTarget;
++                pendingDof.depthTarget = depthTarget;
++                pendingDof.resolutionScale = framebuffer.resolutionScale;
++                pendingDof.start = framebuffer.dofStart;
++                pendingDof.m22 = framebuffer.dofM22;
++                pendingDof.m32 = framebuffer.dofM32;
++                pendingDof.vpScaleZ = framebuffer.dofVpScaleZ;
++                pendingDof.vpTranslateZ = framebuffer.dofVpTranslateZ;
++            }
++        }
++    }
++
++    void FramebufferRenderer::flushPendingDof(RenderWorker *worker) {
++        RenderTarget *colorTarget = pendingDof.colorTarget;
++        RenderTarget *depthTarget = pendingDof.depthTarget;
++        if ((colorTarget == nullptr) || (depthTarget == nullptr)) {
++            return;
++        }
++
++        applyPendingDof(worker);
++        worker->commandList->barriers(RenderBarrierStage::GRAPHICS, {
++            RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::SHADER_READ),
++            RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::SHADER_READ)
++        });
++    }
++
++    void FramebufferRenderer::applyPendingDof(RenderWorker *worker) {
++        RenderTarget *colorTarget = pendingDof.colorTarget;
++        RenderTarget *depthTarget = pendingDof.depthTarget;
++        const float resolutionScale = pendingDof.resolutionScale;
++        const float start = pendingDof.start, m22 = pendingDof.m22, m32 = pendingDof.m32, vpScaleZ = pendingDof.vpScaleZ, vpTranslateZ = pendingDof.vpTranslateZ;
++        pendingDof = PendingDof();
++        if ((colorTarget == nullptr) || (depthTarget == nullptr) || (crackFillCopy == nullptr) ||
++            (crackFillCopyWidth != colorTarget->width) || (crackFillCopyHeight != colorTarget->height) || (crackFillCopySamples != colorTarget->multisampling.sampleCount) ||
++            (crackFillCopyFormat != colorTarget->format)) {
++            return;
+         }
++
++        const bool multisampled = (colorTarget->multisampling.sampleCount > 1);
++        const ShaderRecord &dofShader = multisampled ? shaderLibrary->dofMS : shaderLibrary->dof;
++        if (dofShader.pipeline == nullptr) {
++            return;
++        }
++
++        if (dofSet == nullptr) {
++            dofSet = std::make_unique<CrackFillDescriptorSet>(worker->device);
++        }
++
++        if (dofSetColorTexture != crackFillCopy.get()) {
++            dofSet->setTexture(dofSet->gColor, crackFillCopy.get(), RenderTextureLayout::SHADER_READ);
++            dofSetColorTexture = crackFillCopy.get();
++        }
++
++        if (dofSetDepthTexture != depthTarget->texture.get()) {
++            dofSet->setTexture(dofSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
++            dofSetDepthTexture = depthTarget->texture.get();
++        }
++
++        RenderCommandList *commandList = worker->commandList.get();
++        commandList->barriers(RenderBarrierStage::COPY, {
++            RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COPY_SOURCE),
++            RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::COPY_DEST)
++        });
++
++        commandList->copyTexture(crackFillCopy.get(), colorTarget->texture.get());
++        commandList->barriers(RenderBarrierStage::GRAPHICS, {
++            RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COLOR_WRITE),
++            RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::SHADER_READ),
++            RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ)
++        });
++
++        colorTarget->setupColorFramebuffer(worker);
++        const RenderViewport viewport(0.0f, 0.0f, float(colorTarget->width), float(colorTarget->height));
++        const RenderRect scissor(0, 0, int32_t(colorTarget->width), int32_t(colorTarget->height));
++        static const bool dofDebug = (getenv("GT_DOF_DEBUG") != nullptr);
++        static const float dofRadius = (getenv("GT_DOF_RADIUS") != nullptr) ? float(atof(getenv("GT_DOF_RADIUS"))) : 3.0f;
++        struct {
++            int32_t width;
++            int32_t height;
++            float maxRadius;
++            float start;
++            float ramp;
++            float m22;
++            float m32;
++            float vpScaleZ;
++            float vpTranslateZ;
++            int32_t debug;
++            int32_t pad0;
++            int32_t pad1;
++        } pushConstants = { int32_t(colorTarget->width), int32_t(colorTarget->height), std::max(1.0f, dofRadius * resolutionScale), start, start, m22, m32,
++            vpScaleZ, vpTranslateZ, dofDebug ? 1 : 0, 0, 0 };
++
++        commandList->setFramebuffer(colorTarget->textureFramebuffer.get());
++        commandList->setViewports(viewport);
++        commandList->setScissors(scissor);
++        commandList->setPipeline(dofShader.pipeline.get());
++        commandList->setGraphicsPipelineLayout(dofShader.pipelineLayout.get());
++        commandList->setGraphicsDescriptorSet(dofSet->get(), 0);
++        commandList->setGraphicsPushConstants(0, &pushConstants);
++        commandList->setVertexBuffers(0, nullptr, 0, nullptr);
++        commandList->drawInstanced(3, 1, 0, 0);
++        commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_WRITE));
+     }
+ 
+     void FramebufferRenderer::waitForUploaders() {
+@@ -1486,6 +1595,13 @@ namespace RT64 {
+ 
+         targetDrawCall.fbStorage = p.fbStorage;
+ 
++        // Depth of field parameters, if the pair drew the 3D scene with the extended far plane.
++        framebuffer.dofStart = fbPair.dofStart;
++        framebuffer.dofM22 = fbPair.dofM22;
++        framebuffer.dofM32 = fbPair.dofM32;
++        framebuffer.dofVpScaleZ = fbPair.dofVpScaleZ;
++        framebuffer.dofVpTranslateZ = fbPair.dofVpTranslateZ;
++
+         // Crack fill (see CrackFillPS.hlsl): for colour targets drawn with depth writes this frame.
+         {
+             static const bool crackFillDisabled = (getenv("GT_NO_CRACK_FILL") != nullptr);
+@@ -1528,6 +1644,7 @@ namespace RT64 {
+                 framebuffer.crackFillRadius = std::max(1, int32_t(std::lround(p.resolutionScale.y)));
+                 // Up to three N64 pixels near the camera where only the sky or the clear colour shows through.
+                 framebuffer.crackFillWideRadius = std::max(3, int32_t(std::lround(3.0f * p.resolutionScale.y)));
++                framebuffer.resolutionScale = p.resolutionScale.y;
+             }
+         }
+         targetDrawCall.sceneIndices.clear();
+diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
+index 7a43323..5ba4344 100644
+--- a/src/render/rt64_framebuffer_renderer.h
++++ b/src/render/rt64_framebuffer_renderer.h
+@@ -125,8 +125,28 @@ namespace RT64 {
+             bool crackFillHoles = false;
+             int32_t crackFillRadius = 1;
+             int32_t crackFillWideRadius = 3;
++            float resolutionScale = 1.0f;
++            float dofStart = 0.0f, dofM22 = 0.0f, dofM32 = 0.0f, dofVpScaleZ = 0.5f, dofVpTranslateZ = 0.5f;
+         };
+ 
++        // Depth of field (GT64, DofPS.hlsl): applied to the last colour target the crack fill ran on, once the next
++        // framebuffer drawn isn't another 3D one on it (the HUD comes after the track and the cars, and stays sharp).
++        struct PendingDof {
++            RenderTarget *colorTarget = nullptr;
++            RenderTarget *depthTarget = nullptr;
++            float resolutionScale = 1.0f;
++            float start = 0.0f, m22 = 0.0f, m32 = 0.0f, vpScaleZ = 0.5f, vpTranslateZ = 0.5f;
++        };
++
++        PendingDof pendingDof;
++        bool dofAllowed = false; // Only the renderer for the output (not the native one that's copied back to RDRAM).
++        std::unique_ptr<CrackFillDescriptorSet> dofSet;
++        const RenderTexture *dofSetColorTexture = nullptr;
++        const RenderTexture *dofSetDepthTexture = nullptr;
++        void applyPendingDof(RenderWorker *worker);
++        // Applies a depth of field still pending at the end of a frame's recording.
++        void flushPendingDof(RenderWorker *worker);
++
+         // Copy of the colour target read by the crack fill pass.
+         std::unique_ptr<RenderTexture> crackFillCopy;
+         uint32_t crackFillCopyWidth = 0;
+diff --git a/src/render/rt64_shader_library.cpp b/src/render/rt64_shader_library.cpp
+index 39aefb6..d4e300c 100644
+--- a/src/render/rt64_shader_library.cpp
++++ b/src/render/rt64_shader_library.cpp
+@@ -41,9 +41,13 @@
+ #include "shaders/RtCopyDepthToColor8XPS.hlsl.spirv.h"
+ #include "shaders/TextureCopyPS.hlsl.spirv.h"
+ #include "shaders/CrackFillPS.hlsl.spirv.h"
++#include "shaders/DofPS.hlsl.spirv.h"
+ #include "shaders/CrackFill2XPS.hlsl.spirv.h"
++#include "shaders/Dof2XPS.hlsl.spirv.h"
+ #include "shaders/CrackFill4XPS.hlsl.spirv.h"
++#include "shaders/Dof4XPS.hlsl.spirv.h"
+ #include "shaders/CrackFill8XPS.hlsl.spirv.h"
++#include "shaders/Dof8XPS.hlsl.spirv.h"
+ #include "shaders/TextureDecodeCS.hlsl.spirv.h"
+ #include "shaders/TextureResolveSamples2XPS.hlsl.spirv.h"
+ #include "shaders/TextureResolveSamples4XPS.hlsl.spirv.h"
+@@ -91,9 +95,13 @@
+ #   include "shaders/RtCopyDepthToColor8XPS.hlsl.dxil.h"
+ #   include "shaders/TextureCopyPS.hlsl.dxil.h"
+ #   include "shaders/CrackFillPS.hlsl.dxil.h"
++#   include "shaders/DofPS.hlsl.dxil.h"
+ #   include "shaders/CrackFill2XPS.hlsl.dxil.h"
++#   include "shaders/Dof2XPS.hlsl.dxil.h"
+ #   include "shaders/CrackFill4XPS.hlsl.dxil.h"
++#   include "shaders/Dof4XPS.hlsl.dxil.h"
+ #   include "shaders/CrackFill8XPS.hlsl.dxil.h"
++#   include "shaders/Dof8XPS.hlsl.dxil.h"
+ #   include "shaders/TextureDecodeCS.hlsl.dxil.h"
+ #   include "shaders/TextureResolveSamples2XPS.hlsl.dxil.h"
+ #   include "shaders/TextureResolveSamples4XPS.hlsl.dxil.h"
+@@ -140,9 +148,13 @@
+ #   include "shaders/RtCopyDepthToColor8XPS.hlsl.metal.h"
+ #   include "shaders/TextureCopyPS.hlsl.metal.h"
+ #   include "shaders/CrackFillPS.hlsl.metal.h"
++#   include "shaders/DofPS.hlsl.metal.h"
+ #   include "shaders/CrackFill2XPS.hlsl.metal.h"
++#   include "shaders/Dof2XPS.hlsl.metal.h"
+ #   include "shaders/CrackFill4XPS.hlsl.metal.h"
++#   include "shaders/Dof4XPS.hlsl.metal.h"
+ #   include "shaders/CrackFill8XPS.hlsl.metal.h"
++#   include "shaders/Dof8XPS.hlsl.metal.h"
+ #   include "shaders/TextureDecodeCS.hlsl.metal.h"
+ #   include "shaders/TextureResolveSamples2XPS.hlsl.metal.h"
+ #   include "shaders/TextureResolveSamples4XPS.hlsl.metal.h"
+@@ -602,6 +614,27 @@ namespace RT64 {
+             crackFillMS.pipelineLayout = layoutBuilder.create(device);
+         }
+ 
++        // Depth of field (GT64): the crack fill's descriptor set (colour copy, depth).
++        {
++            CrackFillDescriptorSet descriptorSet;
++            layoutBuilder.begin();
++            layoutBuilder.addPushConstant(0, 0, sizeof(int32_t) * 12, RenderShaderStageFlag::PIXEL);
++            layoutBuilder.addDescriptorSet(descriptorSet);
++            layoutBuilder.end();
++            dof.pipelineLayout = layoutBuilder.create(device);
++
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(DofPSBlobDXIL, DofPSBlobSPIRV, DofPSBlobMSL, "PSMain", shaderFormat));
++            RenderGraphicsPipelineDesc pipelineDesc;
++            pipelineDesc.pipelineLayout = dof.pipelineLayout.get();
++            pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
++            pipelineDesc.renderTargetFormat[0] = RenderTarget::colorBufferFormat(usesHDR);
++            pipelineDesc.renderTargetCount = 1;
++            pipelineDesc.vertexShader = fullScreenVertexShader.get();
++            pipelineDesc.pixelShader = pixelShader.get();
++            dof.pipeline = device->createGraphicsPipeline(pipelineDesc);
++            dofMS.pipelineLayout = layoutBuilder.create(device);
++        }
++
+         // Texture Decode.
+         {
+             TextureDecodeDescriptorSet descriptorSet;
+@@ -672,7 +705,9 @@ namespace RT64 {
+         const void *RtCopyDepthToColorPSBlob = nullptr;
+         const void *RtCopyDepthToColorPSMSBlob = nullptr;
+         const void *CrackFillPSMSBlob = nullptr;
++        const void *DofPSMSBlob = nullptr;
+         uint32_t CrackFillPSMSBlobSize = 0;
++        uint32_t DofPSMSBlobSize = 0;
+         const void *RtCopyColorToDepthPSBlob = nullptr;
+         const void *RtCopyColorToDepthPSMSBlob = nullptr;
+         uint32_t TextureResolvePSBlobSize = 0;
+@@ -694,7 +729,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor2XPSBlobDXIL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobDXIL);
+                 CrackFillPSMSBlob = CrackFill2XPSBlobDXIL;
++                DofPSMSBlob = Dof2XPSBlobDXIL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobDXIL);
++                DofPSMSBlobSize = std::size(Dof2XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobDXIL);
+                 break;
+@@ -704,7 +741,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor4XPSBlobDXIL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobDXIL);
+                 CrackFillPSMSBlob = CrackFill4XPSBlobDXIL;
++                DofPSMSBlob = Dof4XPSBlobDXIL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobDXIL);
++                DofPSMSBlobSize = std::size(Dof4XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobDXIL);
+                 break;
+@@ -714,7 +753,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor8XPSBlobDXIL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobDXIL);
+                 CrackFillPSMSBlob = CrackFill8XPSBlobDXIL;
++                DofPSMSBlob = Dof8XPSBlobDXIL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobDXIL);
++                DofPSMSBlobSize = std::size(Dof8XPSBlobDXIL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobDXIL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobDXIL);
+                 break;
+@@ -736,7 +777,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor2XPSBlobMSL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobMSL);
+                 CrackFillPSMSBlob = CrackFill2XPSBlobMSL;
++                DofPSMSBlob = Dof2XPSBlobMSL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobMSL);
++                DofPSMSBlobSize = std::size(Dof2XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobMSL);
+                 break;
+@@ -746,7 +789,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor4XPSBlobMSL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobMSL);
+                 CrackFillPSMSBlob = CrackFill4XPSBlobMSL;
++                DofPSMSBlob = Dof4XPSBlobMSL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobMSL);
++                DofPSMSBlobSize = std::size(Dof4XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobMSL);
+                 break;
+@@ -756,7 +801,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor8XPSBlobMSL;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobMSL);
+                 CrackFillPSMSBlob = CrackFill8XPSBlobMSL;
++                DofPSMSBlob = Dof8XPSBlobMSL;
+                 CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobMSL);
++                DofPSMSBlobSize = std::size(Dof8XPSBlobMSL);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobMSL;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobMSL);
+                 break;
+@@ -777,7 +824,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor2XPSBlobSPIRV;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobSPIRV);
+                 CrackFillPSMSBlob = CrackFill2XPSBlobSPIRV;
++                DofPSMSBlob = Dof2XPSBlobSPIRV;
+                 CrackFillPSMSBlobSize = std::size(CrackFill2XPSBlobSPIRV);
++                DofPSMSBlobSize = std::size(Dof2XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobSPIRV);
+                 break;
+@@ -787,7 +836,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor4XPSBlobSPIRV;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobSPIRV);
+                 CrackFillPSMSBlob = CrackFill4XPSBlobSPIRV;
++                DofPSMSBlob = Dof4XPSBlobSPIRV;
+                 CrackFillPSMSBlobSize = std::size(CrackFill4XPSBlobSPIRV);
++                DofPSMSBlobSize = std::size(Dof4XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobSPIRV);
+                 break;
+@@ -797,7 +848,9 @@ namespace RT64 {
+                 RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor8XPSBlobSPIRV;
+                 RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobSPIRV);
+                 CrackFillPSMSBlob = CrackFill8XPSBlobSPIRV;
++                DofPSMSBlob = Dof8XPSBlobSPIRV;
+                 CrackFillPSMSBlobSize = std::size(CrackFill8XPSBlobSPIRV);
++                DofPSMSBlobSize = std::size(Dof8XPSBlobSPIRV);
+                 RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobSPIRV;
+                 RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobSPIRV);
+                 break;
+@@ -873,6 +926,19 @@ namespace RT64 {
+                 crackFillMS.pipeline = device->createGraphicsPipeline(crackFillDesc);
+             }
+ 
++            if ((DofPSMSBlob != nullptr) && (dofMS.pipelineLayout != nullptr)) {
++                std::unique_ptr<RenderShader> dofMSShader = device->createShader(DofPSMSBlob, DofPSMSBlobSize, "PSMain", shaderFormat);
++                RenderGraphicsPipelineDesc dofDesc;
++                dofDesc.pipelineLayout = dofMS.pipelineLayout.get();
++                dofDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
++                dofDesc.renderTargetFormat[0] = RenderTarget::colorBufferFormat(usesHDR);
++                dofDesc.renderTargetCount = 1;
++                dofDesc.vertexShader = fullScreenVertexShader.get();
++                dofDesc.pixelShader = dofMSShader.get();
++                dofDesc.multisampling = multisampling;
++                dofMS.pipeline = device->createGraphicsPipeline(dofDesc);
++            }
++
+             if (RtCopyDepthToColorPSMSBlob != nullptr) {
+                 std::unique_ptr<RenderShader> depthToColorMSShader = device->createShader(RtCopyDepthToColorPSMSBlob, RtCopyDepthToColorPSMSBlobSize, "PSMain", shaderFormat);
+                 pipelineDesc.pixelShader = depthToColorMSShader.get();
+diff --git a/src/render/rt64_shader_library.h b/src/render/rt64_shader_library.h
+index cc1eeb7..0576bb6 100644
+--- a/src/render/rt64_shader_library.h
++++ b/src/render/rt64_shader_library.h
+@@ -55,6 +55,8 @@ namespace RT64 {
+         ShaderRecord textureCopy;
+         ShaderRecord crackFill;
+         ShaderRecord crackFillMS;
++        ShaderRecord dof;
++        ShaderRecord dofMS;
+         ShaderRecord textureResolve;
+         ShaderRecord videoInterfaceLinear;
+         ShaderRecord videoInterfaceNearest;
+diff --git a/src/shaders/DofPS.hlsl b/src/shaders/DofPS.hlsl
+new file mode 100644
+index 0000000..7502fa9
+--- /dev/null
++++ b/src/shaders/DofPS.hlsl
+@@ -0,0 +1,113 @@
++//
++// RT64
++//
++
++// Distance depth of field (GT64): past a start distance the picture blurs, growing to `maxRadius` pixels by twice the
++// start distance and staying there (the sky included). Gathered from a spiral of taps around each pixel; a tap only
++// counts when its own blur reaches this pixel, so sharp nearer things (the cars, the road close by) don't smear into
++// the blurred distance behind them.
++
++struct DofCB {
++    int2 size;
++    float maxRadius;
++    float start;        // distance where the blur begins (world units along the view axis)
++    float ramp;         // distance over which it grows to maxRadius
++    float m22;          // the extended projection's z terms: distance = m32 / (ndc + m22)
++    float m32;
++    float vpScaleZ;     // depth = ndc * vpScaleZ + vpTranslateZ
++    float vpTranslateZ;
++    int debug;
++    int pad0;
++    int pad1;
++};
++
++[[vk::push_constant]] ConstantBuffer<DofCB> gConstants : register(b0);
++
++#if defined(SAMPLES_8X)
++#   define SAMPLE_COUNT 8
++#elif defined(SAMPLES_4X)
++#   define SAMPLE_COUNT 4
++#elif defined(SAMPLES_2X)
++#   define SAMPLE_COUNT 2
++#endif
++
++#ifdef SAMPLE_COUNT
++Texture2DMS<float4> gColor : register(t1);
++Texture2DMS<float> gDepth : register(t2);
++
++// The nearest sample: a pixel on a sharp object's edge keeps its blur.
++float depthAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    float d = 1.0f;
++    for (uint i = 0; i < SAMPLE_COUNT; i++) {
++        d = min(d, gDepth.Load(p, i));
++    }
++
++    return d;
++}
++
++float4 colorAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    float4 c = float4(0.0f, 0.0f, 0.0f, 0.0f);
++    for (uint i = 0; i < SAMPLE_COUNT; i++) {
++        c += gColor.Load(p, i);
++    }
++
++    return c / float(SAMPLE_COUNT);
++}
++#else
++Texture2D<float4> gColor : register(t1);
++Texture2D<float> gDepth : register(t2);
++
++float depthAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    return gDepth.Load(int3(p, 0));
++}
++
++float4 colorAt(int2 p) {
++    p = clamp(p, int2(0, 0), gConstants.size - 1);
++    return gColor.Load(int3(p, 0));
++}
++#endif
++
++// Blur radius in pixels for a depth buffer value.
++float blurAt(float depth) {
++    const float ndc = (depth - gConstants.vpTranslateZ) / gConstants.vpScaleZ;
++    const float denom = ndc + gConstants.m22;
++    // Past the far plane (the cleared depth: the sky) the distance runs off to infinity: full blur.
++    float distance = (denom < 0.0f) ? (gConstants.m32 / denom) : 1e30f;
++    if (!(distance > 0.0f)) {
++        distance = 1e30f;
++    }
++
++    return gConstants.maxRadius * saturate((distance - gConstants.start) / gConstants.ramp);
++}
++
++#define TAP_COUNT 32
++#define GOLDEN_ANGLE 2.39996323f
++
++float4 PSMain(in float4 pos : SV_Position, in float2 uv : TEXCOORD0) : SV_TARGET {
++    const int2 p = int2(pos.xy);
++    const float radius = blurAt(depthAt(p));
++    if (gConstants.debug != 0) {
++        const float v = radius / gConstants.maxRadius;
++        return float4(v, v * 0.5f, 0.0f, 1.0f);
++    }
++
++    if (radius < 0.5f) {
++        discard;
++    }
++
++    float4 sum = colorAt(p);
++    float weight = 1.0f;
++    for (int i = 0; i < TAP_COUNT; i++) {
++        const float r = radius * sqrt((float(i) + 0.5f) / float(TAP_COUNT));
++        const float a = float(i) * GOLDEN_ANGLE;
++        const int2 q = p + int2(round(float2(cos(a), sin(a)) * r));
++        const float w = saturate(blurAt(depthAt(q)) - r + 1.0f);
++        sum += colorAt(q) * w;
++        weight += w;
++    }
++
++    return sum / weight;
++}
