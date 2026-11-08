@@ -140,11 +140,11 @@ index 2970e71..a57257c 100644
          // Add the draw call to the FB pair.
          GameCall gameCall;
          gameCall.callDesc = drawCall;
-+        // GT64's car shadows: a 48x48 4-bit texture on the car models' (NoN) task, drawn opaque with point sampling.
++        // GT64's car shadows: a 48x48 4-bit texture (on the cars' NoN task in races, the main task in the intro), drawn opaque.
 +        // Filter them and blend them at about half strength: the combiner's alpha becomes TEXEL0 * PRIM (the colour,
 +        // TEXEL0 * SHADE, doesn't use PRIM) and the render mode Z-buffered translucent surface.
 +        static const bool gtCarShadows = (getenv("GT_NO_SHADOW_FIX") == nullptr);
-+        if (gtCarShadows && !rdp->s2dTask && rsp->NoN && drawCall.textureOn && (drawCall.colorCombiner.L == 0xFC127E24) &&
++        if (gtCarShadows && !rdp->s2dTask && drawCall.textureOn && (drawCall.colorCombiner.L == 0xFC127E24) &&
 +            (drawCall.colorCombiner.H == 0xFFFFF3F9) && (drawCall.otherMode.L == 0x00553078)) {
 +            // The draw's own tile (the RDP's tiles may already hold the next draw's).
 +            const LoadTile &tile = workload.drawData.callTiles[drawCall.tileIndex].loadTile;

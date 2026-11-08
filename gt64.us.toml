@@ -30,7 +30,7 @@ text = "{ void gt_on_rom_read(uint32_t, uint32_t, uint32_t); gt_on_rom_read((uin
 [[patches.hook]]
 func = "func_80007C80"
 before_vram = 0x80007D74
-text = "{ void gt_stats_gfx_submit(void); gt_stats_gfx_submit(); void gt_debug_task(uint8_t*, uint32_t, int); gt_debug_task(rdram, (uint32_t)ctx->r17 + 0x28, 0); }"
+text = "{ void gt_stats_gfx_submit(void); gt_stats_gfx_submit(); void gt_debug_task(uint8_t*, uint32_t, int); gt_debug_task(rdram, (uint32_t)ctx->r17 + 0x28, 0); void gt_hd_wheels(uint8_t*, uint32_t); gt_hd_wheels(rdram, (uint32_t)ctx->r17 + 0x28); }"
 
 [[patches.hook]]
 func = "func_80007AC4"

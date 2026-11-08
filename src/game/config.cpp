@@ -107,6 +107,26 @@ T get_graphics_config_enum_value(const std::string& option_id) {
     return static_cast<T>(std::get<uint32_t>(recompui::config::get_graphics_config().get_option_value(option_id)));
 }
 
+static void add_hd_wheels_option(recomp::config::Config &config) {
+    using EnumOptionVector = const std::vector<recomp::config::ConfigOptionEnumOption>;
+    static EnumOptionVector hd_wheels_options = {
+        {gt::HdWheels::Off, "Off", "Off"},
+        {gt::HdWheels::On, "On", "On"},
+    };
+    config.add_enum_option(
+        gt::configkeys::graphics::hd_wheels,
+        "HD Wheels",
+        "<recomp-color primary>On</recomp-color> replaces the cars' six-sided wheels with modelled ones: round tyres "
+        "and five-spoke alloy rims. <recomp-color primary>Off</recomp-color> keeps the original wheels.",
+        hd_wheels_options,
+        gt::HdWheels::On
+    );
+}
+
+gt::HdWheels gt::get_hd_wheels() {
+    return get_graphics_config_enum_value<gt::HdWheels>(gt::configkeys::graphics::hd_wheels);
+}
+
 gt::DrawDistance gt::get_draw_distance() {
     return get_graphics_config_enum_value<gt::DrawDistance>(gt::configkeys::graphics::draw_distance);
 }
@@ -172,6 +192,7 @@ void gt::init_config() {
     auto &graphics_config = recompui::config::create_graphics_tab();
     add_graphics_options(graphics_config);
     add_draw_distance_option(graphics_config);
+    add_hd_wheels_option(graphics_config);
 
     set_control_defaults();
     set_control_descriptions();
