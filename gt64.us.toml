@@ -247,3 +247,12 @@ text = "{ float gt_cone_half_angle(void); ctx->f6.fl = 90.0f - gt_cone_half_angl
 func = "func_80009698"
 before_vram = 0x80009898
 text = "{ float gt_cone_half_angle(void); ctx->f8.fl = 90.0f + gt_cone_half_angle(); }"
+
+# Cars at the furthest detail level (car+0x119 bit 0x20) skip func_800379B8, which places the drawn body from the car's
+# physics: its height (with the ride height) and its turn and pitch. The game didn't draw them, so it didn't matter;
+# with an extended draw distance they are drawn (gt_car_detail), and kept the height they had when they went out of
+# range, flying over dips. Placed every frame here, like the nearer cars.
+[[patches.hook]]
+func = "func_80037C58"
+before_vram = 0x80037C88
+text = "{ int gt_far_cars_drawn(void); if ((ctx->r25 & 0x20) && gt_far_cars_drawn()) { recomp_context gt_saved = *ctx; func_800379B8(rdram, ctx); *ctx = gt_saved; } }"

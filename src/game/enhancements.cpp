@@ -805,6 +805,11 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
 
 // Half the object list's view cone in degrees (func_80009698): the game's 45 is wide enough for 4:3; with an extended
 // draw distance, 65 covers up to 21:9 and the width of a car at the edge.
+// Far cars (detail level 0x20) are drawn: see gt_car_detail and func_80037C58's hook.
+extern "C" int gt_far_cars_drawn(void) {
+    return extended_draw_distance() ? 1 : 0;
+}
+
 extern "C" float gt_cone_half_angle(void) {
     return extended_draw_distance() ? 65.0f : 45.0f;
 }
