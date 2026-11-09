@@ -1,0 +1,18 @@
+diff --git a/src/render/rt64_texture_cache.cpp b/src/render/rt64_texture_cache.cpp
+index 0848f3e..5314e27 100644
+--- a/src/render/rt64_texture_cache.cpp
++++ b/src/render/rt64_texture_cache.cpp
+@@ -334,8 +334,11 @@ namespace RT64 {
+             
+             // The max age allowed is the difference between the last time the texture was used and the time it was uploaded.
+             // Ensure the textures live long enough for the frame queue to use them.
+-            const uint64_t MinimumMaxAge = WORKLOAD_QUEUE_SIZE * 2;
+-            const uint64_t MaximumMaxAge = WORKLOAD_QUEUE_SIZE * 32;
++            // GT64: at least WORKLOAD_QUEUE_SIZE * 128 workloads (about 20 seconds of a race). The track's sections come
++            // in and out of the draw distance as the camera moves, and with a short lifetime their textures were thrown
++            // away and uploaded again over and over (each upload holds up the frame: stutter).
++            const uint64_t MinimumMaxAge = WORKLOAD_QUEUE_SIZE * 128;
++            const uint64_t MaximumMaxAge = WORKLOAD_QUEUE_SIZE * 128;
+             const uint64_t age = submissionFrame - it->second;
+             const uint64_t maxAge = std::clamp(it->second - creationFrames[it->first], MinimumMaxAge, MaximumMaxAge);
+ 

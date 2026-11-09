@@ -160,6 +160,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # Frame interpolation: parts drawn several times (wheels) aren't paired with one far from where it was expected, so a
 # car's wheels appearing as another's disappear (GT64 draws wheels only near the camera) don't fly across between them.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-interp-repeated-kinds.patch)
+# Textures kept for about 20 seconds after their last use instead of a fraction of a second: track sections coming in and
+# out of the draw distance had their textures uploaded again over and over (stutter).
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-texture-lifetime.patch)
 
 apply_dependency_patches()
 
