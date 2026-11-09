@@ -805,9 +805,18 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
 
 // Half the object list's view cone in degrees (func_80009698): the game's 45 is wide enough for 4:3; with an extended
 // draw distance, 65 covers up to 21:9 and the width of a car at the edge.
-// Far cars (detail level 0x20) are drawn: see gt_car_detail and func_80037C58's hook.
-extern "C" int gt_far_cars_drawn(void) {
-    return extended_draw_distance() ? 1 : 0;
+// The AI update's mode (func_80032874, called from func_80028604 for each AI car): see the hook in gt64.us.toml.
+static bool ai_update = false;
+
+extern "C" void gt_ai_update_begin(void) {
+    ai_update = true;
+}
+
+extern "C" uint32_t gt_ai_update_mode(uint32_t mode) {
+    if (ai_update && extended_draw_distance()) {
+        mode |= 5u;
+    }
+    return mode;
 }
 
 extern "C" float gt_cone_half_angle(void) {
@@ -911,6 +920,7 @@ extern "C" void gt_wheel_drawn(uint8_t* rdram) {
 // Cars drawn as bodies alone (+0x119 bit 0x10, 2 to about 5 track sections from the camera) in full instead, see
 // gt64.us.toml. The current car is *D_800DB5D0.
 extern "C" void gt_car_detail(uint8_t* rdram) {
+    ai_update = false;
     const uint32_t car = rd32(rdram, 0x800DB5D0u);
     if (car < 0x80000000u || car >= 0x80800000u) {
         return;

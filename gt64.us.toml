@@ -248,11 +248,16 @@ func = "func_80009698"
 before_vram = 0x80009898
 text = "{ float gt_cone_half_angle(void); ctx->f8.fl = 90.0f + gt_cone_half_angle(); }"
 
-# Cars at the furthest detail level (car+0x119 bit 0x20) skip func_800379B8, which places the drawn body from the car's
-# physics: its height (with the ride height) and its turn and pitch. The game didn't draw them, so it didn't matter;
-# with an extended draw distance they are drawn (gt_car_detail), and kept the height they had when they went out of
-# range, flying over dips. Placed every frame here, like the nearer cars.
+# The AI's per-frame update (func_80028604 calls func_80032874 with a mode by its track sections from the camera): full
+# (5) within 2 sections, 4 or 5 out to about 5, and 0 further out, which leaves the car's height, turn and pitch as they
+# were. With an extended draw distance those cars are drawn, so they flew over dips and crests: every car gets the full
+# update (gt_ai_update_mode).
 [[patches.hook]]
-func = "func_80037C58"
-before_vram = 0x80037C88
-text = "{ int gt_far_cars_drawn(void); if ((ctx->r25 & 0x20) && gt_far_cars_drawn()) { recomp_context gt_saved = *ctx; func_800379B8(rdram, ctx); *ctx = gt_saved; } }"
+func = "func_80028604"
+before_vram = 0x80028608
+text = "{ void gt_ai_update_begin(void); gt_ai_update_begin(); }"
+
+[[patches.hook]]
+func = "func_80032874"
+before_vram = 0x80032880
+text = "{ uint32_t gt_ai_update_mode(uint32_t); ctx->r5 = (gpr)(int32_t)gt_ai_update_mode((uint32_t)ctx->r5); }"
