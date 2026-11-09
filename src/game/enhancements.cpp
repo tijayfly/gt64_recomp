@@ -31,6 +31,7 @@ extern "C" void gt_controller_wait(uint8_t* rdram, recomp_context* ctx) {
 extern "C" void load_overlays(uint32_t rom, int32_t ram_addr, uint32_t size);
 extern "C" void unload_overlays(int32_t ram_addr, uint32_t size);
 
+
 namespace {
     constexpr uint32_t ovl_front_rom = 0xC7920;
     constexpr uint32_t ovl_front_ram = 0x801A2520;
@@ -905,14 +906,14 @@ extern "C" void gt_car_detail(uint8_t* rdram) {
         flags &= uint8_t(~0x10);
     }
     // Further out (0x20) the game doesn't draw the car at all, which hid it in the fog of its own draw distance; with an
-    // extended one, cars around that point came and went every few frames. Draw their bodies (and shadows), but only on
-    // a track section drawn this frame or the last (the car's is +0x16A): one past the end of the track drawn, or on a
-    // stretch of it out of sight (round a bend, beyond a hill), seemed to fly over nothing. Not their wheels, which the
-    // game doesn't update out there.
+    // extended one, cars around that point came and went every few frames. Draw them in full (body-only, without the
+    // wheels that fill the gap under it, a car seemed to hover), but only on a track section drawn this frame or the
+    // last (the car's is +0x16A): one past the end of the track drawn, or on a stretch of it out of sight, seemed to fly
+    // over nothing.
     else if (extended_draw_distance()) {
         const uint32_t section = rd16(rdram, car + 0x16A);
         if (section < section_drawn.size() && section_drawn[section] != 0 && section_drawn[section] >= game_frame) {
-            flags = uint8_t((flags & ~0x20) | 0x10);
+            flags = uint8_t(flags & ~0x30);
         }
     }
 }
@@ -929,6 +930,8 @@ namespace {
         wr32(rdram, 0x8010FFC8u, gfx + 8);
     }
 }
+
+namespace { uint32_t part_obj = 0; }
 
 extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
     part_group_open = false;
@@ -955,10 +958,40 @@ extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
     gfx_put(rdram, 0x6400000Cu, id);                          // gEXMatrixGroupSimple(id, push, modelview, position and
     gfx_put(rdram, 0x00000029u, 0);                           // rotation interpolated, the rest skipped, linear order)
     part_group_open = true;
+    part_obj = obj;
 }
 
 extern "C" void gt_part_end(uint8_t* rdram) {
     if (part_group_open) {
+        static const bool log = std::getenv("GT_PARTLOG") != nullptr;
+        if (log) {
+            // The part's last modelview load, back from here: its translation (camera space) and the object's position.
+            const uint32_t end = rd32(rdram, 0x8010FFC8u);
+            for (uint32_t a = end - 8; a + 0x200 > end; a -= 8) {
+                if ((rd32(rdram, a) >> 24) == 0x01) {
+                    const uint32_t m = 0x80000000u | (rd32(rdram, a + 4) & 0x7FFFFFu);
+                    auto fx = [&](int i) {
+                        const uint32_t hi = rd32(rdram, m + (i / 2) * 4), lo = rd32(rdram, m + 0x20 + (i / 2) * 4);
+                        const int16_t ih = int16_t((i & 1) ? (hi & 0xFFFF) : (hi >> 16));
+                        const uint16_t fl = uint16_t((i & 1) ? (lo & 0xFFFF) : (lo >> 16));
+                        return ih + fl / 65536.0;
+                    };
+                    const uint32_t cam = rd32(rdram, 0x8010FFCCu);
+                    auto rd_double = [](uint8_t* r, uint32_t x) {
+                        const uint64_t bits = (uint64_t(rd32(r, x)) << 32) | rd32(r, x + 4);
+                        double v; std::memcpy(&v, &bits, sizeof(v)); return v;
+                    };
+                    char nm[12] = {};
+                    for (int i = 0; i < 11; i++) nm[i] = char(rdram[((part_obj + 5 + i) ^ 3) - 0x80000000u]);
+                    std::fprintf(stderr, "[part] f%u car%u %s P %.1f %.1f %.1f C %.1f %.1f %.1f M", game_frame, rd16(rdram, part_obj + 2), nm,
+                        rd_double(rdram, part_obj + 0x18), rd_double(rdram, part_obj + 0x20), rd_double(rdram, part_obj + 0x28),
+                        rd_double(rdram, cam + 0xD8), rd_double(rdram, cam + 0xE0), rd_double(rdram, cam + 0xE8));
+                    for (int i = 0; i < 16; i++) std::fprintf(stderr, " %.3f", fx(i));
+                    std::fprintf(stderr, "\n");
+                    break;
+                }
+            }
+        }
         gfx_put(rdram, 0x6400000Du, 1);                       // gEXPopMatrixGroup(modelview)
         part_group_open = false;
     }

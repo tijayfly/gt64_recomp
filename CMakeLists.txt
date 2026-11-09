@@ -205,7 +205,6 @@ set(SOURCES
     ${CMAKE_SOURCE_DIR}/src/game/config.cpp
     ${CMAKE_SOURCE_DIR}/src/game/enhancements.cpp
     ${CMAKE_SOURCE_DIR}/src/game/hd_wheels.cpp
-    ${CMAKE_SOURCE_DIR}/src/game/car_fog.cpp
 
 
     ${CMAKE_SOURCE_DIR}/rsp/n_aspMain.cpp
