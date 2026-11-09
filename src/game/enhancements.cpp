@@ -670,6 +670,7 @@ namespace {
     constexpr uint32_t ext_gfx_size = 0x30000u;
     constexpr uint32_t ext_matrices = 0x80480000u;  // two matrix buffers of 0x20000
     constexpr uint32_t ext_matrix_size = 0x20000u;  // (0x804C0000 on: HD wheels, src/game/hd_wheels.cpp)
+    constexpr double max_draw_offset = 32000.0; // largest camera-relative position an N64 matrix holds (32767), less a margin
     constexpr uint32_t ext_track = 0x80500000u;     // the track's geometry block, copied from ROM
     constexpr uint32_t ext_track_size = 0x300000u;
     constexpr uint32_t chunk_table = 0x80160950u;
@@ -775,7 +776,8 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     }
     int32_t behind, ahead;
     section_counts(rdram, behind, ahead);
-    const double reach = (ahead >= section_ring(rdram) / 2) ? 1e6 : object_reach(rdram, ahead);
+    // (Not past where a section's or object's matrix can hold its position: see gt_add_section.)
+    const double reach = std::min((ahead >= section_ring(rdram) / 2) ? 1e6 : object_reach(rdram, ahead), max_draw_offset);
     wr64f(rdram, 0x800AA608u, reach * reach);
     wr64f(rdram, 0x800AA610u, reach * reach);
     wr64f(rdram, 0x800AA618u, reach * reach);
@@ -811,6 +813,18 @@ extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
 // pool, nodes go to the Expansion Pak.
 extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
     constexpr uint32_t pool_ptr = 0x8011BA38u;  // also the pool's end
+    // Past 32767 units from the camera (any axis), a section's position doesn't fit the N64's fixed-point matrix
+    // (s15.16) and wraps around: Maximum's whole track then drew far pieces somewhere near the camera, turned their own
+    // way (a barrier appearing beside the road for a frame). Those aren't drawn.
+    {
+        const uint32_t cam = rd32(rdram, 0x8010FFCCu);
+        const double dx = rd64f(rdram, section + 0x08) - rd64f(rdram, cam + 0xD8);
+        const double dy = rd64f(rdram, section + 0x10) - rd64f(rdram, cam + 0xE0);
+        const double dz = rd64f(rdram, section + 0x18) - rd64f(rdram, cam + 0xE8);
+        if (std::max({ std::fabs(dx), std::fabs(dy), std::fabs(dz) }) > max_draw_offset) {
+            return;
+        }
+    }
     const uint32_t tail = rd32(rdram, pool_ptr);
     uint32_t node = tail + 0x28;
     if (tail < ext_nodes && node + 0x28 > pool_ptr) {
