@@ -544,7 +544,10 @@ namespace {
 }
 
 // Each graphics task, as the game submits it (before the renderer reads it).
+extern "C" void gt_car_fog(uint8_t* rdram, uint32_t task);
+
 extern "C" void gt_hd_wheels(uint8_t* rdram, uint32_t task) {
+    gt_car_fog(rdram, task);
     ram = rdram;
     if (gt::get_hd_wheels() != gt::HdWheels::On) {
         if (!patched.empty()) unpatch_all();
