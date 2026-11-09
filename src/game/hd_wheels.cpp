@@ -16,8 +16,10 @@
 #include "gt_config.h"
 
 namespace {
-    // Built wheels live at the end of the Expansion Pak's matrix buffers (which keep 0x20000 each, see enhancements.cpp).
-    constexpr uint32_t pool_start = 0x804C0000u;
+    // Built wheels live in the Expansion Pak after the extended matrix buffers (see enhancements.cpp).
+    // 0x80000: a race's field has about 20 wheel sizes and sides at 0x51E0 each. When it's full every model is dropped
+    // and rebuilt, which takes long enough to stall a frame (it did every second or so in 0x40000).
+    constexpr uint32_t pool_start = 0x80480000u;
     constexpr uint32_t pool_end = 0x80500000u;
 
     uint8_t* ram = nullptr;

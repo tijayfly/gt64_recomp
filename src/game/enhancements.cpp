@@ -666,10 +666,13 @@ extern "C" void gt_pedal_end(uint8_t* rdram, int brake) {
 // - the sections' geometry: it's streamed (see gt_track_segment).
 namespace {
     constexpr uint32_t ext_nodes = 0x80400000u;     // list nodes past the game's pool (0x10000)
-    constexpr uint32_t ext_gfx = 0x80410000u;       // two display list buffers of 0x30000
-    constexpr uint32_t ext_gfx_size = 0x30000u;
-    constexpr uint32_t ext_matrices = 0x80480000u;  // two matrix buffers of 0x20000
-    constexpr uint32_t ext_matrix_size = 0x20000u;  // (0x804C0000 on: HD wheels, src/game/hd_wheels.cpp)
+    // Two display list buffers of 0x18000 and two matrix buffers of 0x20000. A frame takes about 0x7C and 0x170 bytes
+    // per track section (EUR GP Short's whole ring of 165: 0x5040 and 0xE900), and Maximum draws only the sections
+    // within max_draw_offset. 0x80480000 on: HD wheels (src/game/hd_wheels.cpp).
+    constexpr uint32_t ext_gfx = 0x80410000u;
+    constexpr uint32_t ext_gfx_size = 0x18000u;
+    constexpr uint32_t ext_matrices = 0x80440000u;
+    constexpr uint32_t ext_matrix_size = 0x20000u;
     constexpr double max_draw_offset = 32000.0; // largest camera-relative position an N64 matrix holds (32767), less a margin
     constexpr uint32_t ext_track = 0x80500000u;     // the track's geometry block, copied from ROM
     constexpr uint32_t ext_track_size = 0x300000u;
