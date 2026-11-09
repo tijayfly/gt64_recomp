@@ -63,10 +63,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - **Slip rumble.** General > Slip Rumble (on by default): the controller rumbles while your wheels spin or the car
   slides, stronger the more it slips. The game's own rumble is unchanged.
 - **Draw distance.** Graphics > Draw Distance, three levels:
-  - *Maximum* (default): as far as the N64's geometry can reach, about 32,000 units from the camera (beyond that
-    positions overflow and pieces would be drawn in the wrong place). That's a little further ahead than *Extended*
-    (about 23 sections on EUR GP Short), more behind, and the whole track on small courses. Split screen (the intro)
-    uses *Extended*.
+  - *Maximum* (default): as far as the engine geometry can reach, about 32,000 units from the camera (beyond that,
+    positions overflow and pieces would be drawn in the wrong place). Split screen uses *Extended*.
   - *Extended*: twice as much track ahead of the camera (20 sections instead of about 11) and more behind, with cars,
     shadows and scenery drawn as far as the track reaches.
   - *Original*: the game's own ranges.
