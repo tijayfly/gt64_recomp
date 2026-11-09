@@ -793,11 +793,20 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     int32_t behind, ahead;
     section_counts(rdram, behind, ahead);
     // (Not past where a section's or object's matrix can hold its position: see gt_add_section.)
+    // Within the view cone only (widened for widescreen, gt_cone_half_angle): objects behind the camera, past the
+    // game's own 1000 all around and 200 behind, aren't sent to be drawn (the renderer showed them upside down in the
+    // sky ahead).
     const double reach = std::min((ahead >= section_ring(rdram) / 2) ? 1e6 : object_reach(rdram, ahead), max_draw_offset);
-    wr64f(rdram, 0x800AA608u, reach * reach);
+    wr64f(rdram, 0x800AA608u, 1e6);
     wr64f(rdram, 0x800AA610u, reach * reach);
-    wr64f(rdram, 0x800AA618u, reach * reach);
+    wr64f(rdram, 0x800AA618u, 4e4);
     return std::max(count, behind);
+}
+
+// Half the object list's view cone in degrees (func_80009698): the game's 45 is wide enough for 4:3; with an extended
+// draw distance, 65 covers up to 21:9 and the width of a car at the edge.
+extern "C" float gt_cone_half_angle(void) {
+    return extended_draw_distance() ? 65.0f : 45.0f;
 }
 
 extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
