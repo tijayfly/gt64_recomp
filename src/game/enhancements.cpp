@@ -5,6 +5,7 @@
 #include "librecomp/game.hpp"
 #include <cstdio>
 #include <map>
+#include <vector>
 #include <mutex>
 #include <atomic>
 
@@ -709,6 +710,8 @@ namespace {
     uint32_t views_this_frame = 0;
     uint32_t game_frame = 0;   // frames built (gt_matrix_buffer)
     uint32_t views_last_frame = 0;
+    // The frame (game_frame) each track section was last drawn on, by its index in the ring.
+    std::vector<uint32_t> section_drawn;
 
     int32_t section_ring(uint8_t* rdram) {
         return int32_t(rd16(rdram, 0x80114588u)) + 1;
@@ -837,6 +840,16 @@ extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
             return;
         }
     }
+    {
+        const uint32_t base = rd32(rdram, 0x80114584u);
+        const uint32_t index = (section - base) / 0x28;
+        if (section >= base && index < 0x1000u) {
+            if (section_drawn.size() <= index) {
+                section_drawn.resize(index + 1, 0);
+            }
+            section_drawn[index] = game_frame + 1;
+        }
+    }
     const uint32_t tail = rd32(rdram, pool_ptr);
     uint32_t node = tail + 0x28;
     if (tail < ext_nodes && node + 0x28 > pool_ptr) {
@@ -892,11 +905,15 @@ extern "C" void gt_car_detail(uint8_t* rdram) {
         flags &= uint8_t(~0x10);
     }
     // Further out (0x20) the game doesn't draw the car at all, which hid it in the fog of its own draw distance; with an
-    // extended one, cars around that point came and went every few frames. Draw their bodies (and shadows): the
-    // object list's distance limit (see gt_sections_behind) still leaves out cars past the track drawn. Not their
-    // wheels, which the game doesn't update out there.
+    // extended one, cars around that point came and went every few frames. Draw their bodies (and shadows), but only on
+    // a track section drawn this frame or the last (the car's is +0x16A): one past the end of the track drawn, or on a
+    // stretch of it out of sight (round a bend, beyond a hill), seemed to fly over nothing. Not their wheels, which the
+    // game doesn't update out there.
     else if (extended_draw_distance()) {
-        flags = uint8_t((flags & ~0x20) | 0x10);
+        const uint32_t section = rd16(rdram, car + 0x16A);
+        if (section < section_drawn.size() && section_drawn[section] != 0 && section_drawn[section] >= game_frame) {
+            flags = uint8_t((flags & ~0x20) | 0x10);
+        }
     }
 }
 
