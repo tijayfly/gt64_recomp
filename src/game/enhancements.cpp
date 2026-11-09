@@ -891,6 +891,13 @@ extern "C" void gt_car_detail(uint8_t* rdram) {
     if (!(flags & 0x20)) {
         flags &= uint8_t(~0x10);
     }
+    // Further out (0x20) the game doesn't draw the car at all, which hid it in the fog of its own draw distance; with an
+    // extended one, cars around that point came and went every few frames. Draw their bodies (and shadows): the
+    // object list's distance limit (see gt_sections_behind) still leaves out cars past the track drawn. Not their
+    // wheels, which the game doesn't update out there.
+    else if (extended_draw_distance()) {
+        flags = uint8_t((flags & ~0x20) | 0x10);
+    }
 }
 
 // Matrix groups for the car parts (see gt64.us.toml): RT64's extended GBI, enabled with a no-op hook (F3DEX: opcode
