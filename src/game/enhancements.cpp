@@ -739,6 +739,13 @@ namespace {
         return std::max(7000.0, spacing * sections * 1.1);
     }
 
+    // Sections either way that stay within max_draw_offset of the camera: by the track's average spacing, less a margin
+    // for the camera (not at its section's origin) and longer steps. gt_add_section drops the rare one still past it.
+    int32_t sections_in_range(uint8_t* rdram) {
+        const double spacing = section_spacing(rdram);
+        return (spacing > 0.0) ? int32_t((max_draw_offset - 2000.0) / (spacing * 1.1)) : 20;
+    }
+
     // The track's average section spacing (0 before it's been measured).
     double section_spacing(uint8_t* rdram) {
         object_reach(rdram, 1);
@@ -751,14 +758,16 @@ namespace {
     // ahead.
     int32_t original_forward = 0;
 
-    // Sections drawn behind and ahead of the camera's: Extended 10 and 20, Maximum the whole ring (Extended's counts while
+    // Sections drawn behind and ahead of the camera's: Extended 10 and 20, Maximum as many as fit (Extended's counts while
     // the game draws more than one view a frame: the whole track several times over is too slow).
     void section_counts(uint8_t* rdram, int32_t& behind, int32_t& ahead) {
         const int32_t ring = section_ring(rdram);
         const uint32_t views = std::max(views_this_frame, views_last_frame);
         const bool all = (gt::get_draw_distance() == gt::DrawDistance::Maximum) && (views <= 1);
-        behind = std::min(all ? ring : 10, (ring - 1) / 2);
-        ahead = std::min(all ? ring : 20, ring - 1 - behind);
+        // Maximum: as many as stay within max_draw_offset (see gt_add_section); the whole track on short ones.
+        const int32_t most = all ? std::max(20, sections_in_range(rdram)) : 20;
+        behind = std::min(all ? most : 10, (ring - 1) / 2);
+        ahead = std::min(most, ring - 1 - behind);
     }
 }
 
