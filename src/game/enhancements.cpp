@@ -1704,10 +1704,12 @@ extern "C" void gt_ai_after_move(uint8_t* rdram) {
 // - the throttle is held down to what keeps the car from slipping: less the more its driven wheels spin past the revs
 //   its road speed gives (car +0x168 against +0x100), and less the more it slides (the angle between its heading,
 //   +0x3B8, and where it's going, +0x3C0); the game's own ramp brings it back up as grip returns;
-// - while it slides more than 8 degrees above 30 km/h, the brake is applied, up to 60% at 20 degrees, which in testing
-//   stopped slides the throttle alone didn't (with the throttle alone, slides past 10 degrees went from 42 to 15 samples
-//   in a test lap of full-lock driving; with the brake, to none).
+// - while it slides more than tc_slide_angle above 30 km/h, the brake is applied, up to 60% 12 degrees further, which in
+//   testing stopped slides the throttle alone didn't (with the throttle alone, slides past 10 degrees went from 42 to 15
+//   samples in a test lap of full-lock driving; with the brake, to none).
 // The game doesn't model wheels locking under braking (the two revs stay equal), so the brake is never eased.
+constexpr double tc_slide_angle = 2.0;  // degrees of slide before the throttle is held back and the brake applied
+
 void gt_traction_control(uint8_t* rdram, uint32_t car, bool brake) {
     if (gt::get_traction_control() != gt::TractionControl::On) {
         return;
@@ -1719,8 +1721,8 @@ void gt_traction_control(uint8_t* rdram, uint32_t car, bool brake) {
         angle = 180.0 - angle;  // backing up
     }
     if (brake) {
-        if (angle < 90.0 && speed > 30.0 && angle > 8.0) {
-            const double want = std::min(0.6, (angle - 8.0) / 20.0);
+        if (angle < 90.0 && speed > 30.0 && angle > tc_slide_angle) {
+            const double want = std::min(0.6, (angle - tc_slide_angle) / 12.0 * 0.6);
             if (read_double(rdram, car + 0x188) < want) {
                 wr64f(rdram, car + 0x188, want);
             }
@@ -1735,7 +1737,7 @@ void gt_traction_control(uint8_t* rdram, uint32_t car, bool brake) {
     const double spin = (wheel_rpm - road_rpm) / std::max(road_rpm, 3000.0);
     float cap = clamp01(float(1.0 - (spin - 0.02) / 0.06));
     if (speed > 15.0) {
-        cap = std::min(cap, clamp01(float(1.0 - (angle - 5.0) / 12.0)));
+        cap = std::min(cap, clamp01(float(1.0 - (angle - tc_slide_angle) / 12.0)));
     }
     if (read_double(rdram, car + 0x180) > double(cap)) {
         wr64f(rdram, car + 0x180, double(cap));
