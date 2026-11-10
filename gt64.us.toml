@@ -261,7 +261,7 @@ text = "{ float gt_cone_half_angle(void); ctx->f8.fl = 90.0f + gt_cone_half_angl
 [[patches.hook]]
 func = "func_80028604"
 before_vram = 0x80028608
-text = "{ void gt_ai_update_begin(void); gt_ai_update_begin(); }"
+text = "{ void gt_ai_update_begin(void); gt_ai_update_begin(); void gt_ai_after_move(uint8_t*); gt_ai_after_move(rdram); }"
 
 [[patches.hook]]
 func = "func_80032874"
@@ -280,3 +280,9 @@ text = "{ void gt_section_try(uint8_t*, recomp_context*); gt_section_try(rdram, 
 func = "func_8003EE1C"
 before_vram = 0x8003EF74
 text = "{ void gt_section_result(uint8_t*, recomp_context*); gt_section_result(rdram, ctx); }"
+
+# Reduce AI Aggression (gt_ai_before_move): before an opponent's move (func_800276E4, s0 = its record).
+[[patches.hook]]
+func = "func_80028520"
+before_vram = 0x80028590
+text = "{ void gt_ai_before_move(uint8_t*, uint32_t); gt_ai_before_move(rdram, (uint32_t)ctx->r16); }"

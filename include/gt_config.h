@@ -16,6 +16,7 @@ namespace gt {
             inline const std::string analog_triggers = "analog_triggers";
             inline const std::string auto_gearbox = "auto_gearbox";
             inline const std::string slip_rumble = "slip_rumble";
+            inline const std::string reduce_ai_aggression = "reduce_ai_aggression";
         }
     }
 
@@ -45,6 +46,11 @@ namespace gt {
         On, // rumble while the car's wheels spin or it slides, harder the more it slips
     };
 
+    enum class ReduceAiAggression {
+        Off,
+        On, // opponents slow down rather than drive into a player's car ahead of them on their line
+    };
+
     enum class HdWheels {
         Off, // the game's six-sided wheels
         On,  // modelled wheels (round tyres, five-spoke rims) in their place
@@ -65,6 +71,7 @@ namespace gt {
     AnalogTriggers get_analog_triggers();
     AutoGearbox get_auto_gearbox();
     SlipRumble get_slip_rumble();
+    ReduceAiAggression get_reduce_ai_aggression();
     DrawDistance get_draw_distance();
     HdWheels get_hd_wheels();
     DepthOfField get_depth_of_field();
