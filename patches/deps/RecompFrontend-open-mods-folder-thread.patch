@@ -1,0 +1,32 @@
+diff --git a/recompui/src/composites/ui_mod_menu.cpp b/recompui/src/composites/ui_mod_menu.cpp
+index 02455fd..38df8b5 100644
+--- a/recompui/src/composites/ui_mod_menu.cpp
++++ b/recompui/src/composites/ui_mod_menu.cpp
+@@ -13,7 +13,9 @@
+ #include <string>
+ 
+ #ifdef WIN32
++#include <objbase.h>
+ #include <shellapi.h>
++#include <thread>
+ #endif
+ 
+ // TODO:
+@@ -290,8 +292,15 @@ void ModMenu::refresh_mods(bool scan_mods) {
+ void ModMenu::open_mods_folder() {
+     std::filesystem::path mods_directory = recomp::mods::get_mods_directory();
+ #if defined(WIN32)
+-    std::wstring path_wstr = mods_directory.wstring();
+-    ShellExecuteW(NULL, L"open", path_wstr.c_str(), NULL, NULL, SW_SHOWDEFAULT);
++    // On a thread of its own, with COM set up as ShellExecute needs: run from the UI's callback it loaded Explorer's
++    // shell extensions into that thread (the one that draws the menus) and stalled it while the folder opened.
++    std::thread([path_wstr = mods_directory.wstring()]() {
++        const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
++        ShellExecuteW(NULL, L"open", path_wstr.c_str(), NULL, NULL, SW_SHOWDEFAULT);
++        if (SUCCEEDED(com)) {
++            CoUninitialize();
++        }
++    }).detach();
+ #elif defined(__linux__)
+     std::string command = "xdg-open \"" + mods_directory.string() + "\" &";
+     std::system(command.c_str());
