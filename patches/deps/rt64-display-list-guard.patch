@@ -1,5 +1,5 @@
 diff --git a/src/hle/rt64_interpreter.cpp b/src/hle/rt64_interpreter.cpp
-index 99e46ae..e50ce66 100644
+index 99e46ae..5ac0d78 100644
 --- a/src/hle/rt64_interpreter.cpp
 +++ b/src/hle/rt64_interpreter.cpp
 @@ -37,8 +37,12 @@ namespace RT64 {
@@ -17,7 +17,7 @@ index 99e46ae..e50ce66 100644
          }
  
          // GT64's card remap (rt64_vi.h) applies to its 2D tasks only.
-@@ -168,12 +172,44 @@ namespace RT64 {
+@@ -168,16 +172,53 @@ namespace RT64 {
          // Check RDRAM if required.
          state->checkRDRAM();
  
@@ -62,3 +62,12 @@ index 99e46ae..e50ce66 100644
  
              if ((extendedOpCode != 0) && (opCode == extendedOpCode)) {
                  extendedFunction(state, &dl);
+             }
++            else if (hleGBI == nullptr) {
++                // The list loaded a microcode RT64 doesn't know (garbage, coming back from qualifying): stop the task.
++                fprintf(stderr, "[rt64] task 0x%08X stopped: it loaded an unknown microcode\n", dlStartAdddress);
++                break;
++            }
+             else {
+                 func = hleGBI->map[opCode];
+ 

@@ -71,7 +71,7 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 
   Extended and Maximum also draw the most detailed track models at any distance, move the far plane out with fog and
   weather left where they were, and draw scenery at the edges of the widescreen view, which the game culled with a
-  view cone sized for 4:3.
+  view cone sized for 4:3. Opponents are drawn in full on all of the track drawn, and follow its hills at any distance.
 - **Depth of field.** Graphics > Depth of Field (on by default): with an extended draw distance, the distance blurs
   past where the original draw distance ended.
 - **Motion blur.** Graphics > Motion Blur (on by default): in races, the track and scenery blur as the camera moves

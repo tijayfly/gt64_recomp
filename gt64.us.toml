@@ -233,3 +233,31 @@ text = "{ void gt_part_end(uint8_t*); gt_part_end(rdram); }"
 func = "func_80028604"
 before_vram = 0x800287F8
 text = "{ void gt_car_detail(uint8_t*); gt_car_detail(rdram); }"
+
+# The object list's view cone (func_80009698): past 1000 units, objects are only drawn within 45 degrees either side
+# of the camera's heading (90), wide enough for 4:3. With an extended draw distance (gt_cone_half_angle), wider for
+# widescreen; the distance limits are set in gt_sections_behind. (Drawing them all around the camera put cars behind
+# it in the sky ahead, upside down.)
+[[patches.hook]]
+func = "func_80009698"
+before_vram = 0x80009880
+text = "{ float gt_cone_half_angle(void); ctx->f6.fl = 90.0f - gt_cone_half_angle(); }"
+
+[[patches.hook]]
+func = "func_80009698"
+before_vram = 0x80009898
+text = "{ float gt_cone_half_angle(void); ctx->f8.fl = 90.0f + gt_cone_half_angle(); }"
+
+# The AI's per-frame update (func_80028604 calls func_80032874 with a mode by its track sections from the camera): full
+# (5) within 2 sections, 4 or 5 out to about 5, and 0 further out, which leaves the car's height, turn and pitch as they
+# were. With an extended draw distance those cars are drawn, so they flew over dips and crests: every car gets the full
+# update (gt_ai_update_mode).
+[[patches.hook]]
+func = "func_80028604"
+before_vram = 0x80028608
+text = "{ void gt_ai_update_begin(void); gt_ai_update_begin(); }"
+
+[[patches.hook]]
+func = "func_80032874"
+before_vram = 0x80032880
+text = "{ uint32_t gt_ai_update_mode(uint32_t); ctx->r5 = (gpr)(int32_t)gt_ai_update_mode((uint32_t)ctx->r5); }"

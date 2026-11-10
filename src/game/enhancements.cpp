@@ -5,6 +5,7 @@
 #include "librecomp/game.hpp"
 #include <cstdio>
 #include <map>
+#include <vector>
 #include <mutex>
 #include <atomic>
 
@@ -29,6 +30,7 @@ extern "C" void gt_controller_wait(uint8_t* rdram, recomp_context* ctx) {
 // other data (the race's) is read over it.
 extern "C" void load_overlays(uint32_t rom, int32_t ram_addr, uint32_t size);
 extern "C" void unload_overlays(int32_t ram_addr, uint32_t size);
+
 
 namespace {
     constexpr uint32_t ovl_front_rom = 0xC7920;
@@ -709,6 +711,8 @@ namespace {
     uint32_t views_this_frame = 0;
     uint32_t game_frame = 0;   // frames built (gt_matrix_buffer)
     uint32_t views_last_frame = 0;
+    // The frame (game_frame) each track section was last drawn on, by its index in the ring.
+    std::vector<uint32_t> section_drawn;
 
     int32_t section_ring(uint8_t* rdram) {
         return int32_t(rd16(rdram, 0x80114588u)) + 1;
@@ -789,11 +793,34 @@ extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     int32_t behind, ahead;
     section_counts(rdram, behind, ahead);
     // (Not past where a section's or object's matrix can hold its position: see gt_add_section.)
+    // Within the view cone only (widened for widescreen, gt_cone_half_angle): objects behind the camera, past the
+    // game's own 1000 all around and 200 behind, aren't sent to be drawn (the renderer showed them upside down in the
+    // sky ahead).
     const double reach = std::min((ahead >= section_ring(rdram) / 2) ? 1e6 : object_reach(rdram, ahead), max_draw_offset);
-    wr64f(rdram, 0x800AA608u, reach * reach);
+    wr64f(rdram, 0x800AA608u, 1e6);
     wr64f(rdram, 0x800AA610u, reach * reach);
-    wr64f(rdram, 0x800AA618u, reach * reach);
+    wr64f(rdram, 0x800AA618u, 4e4);
     return std::max(count, behind);
+}
+
+// Half the object list's view cone in degrees (func_80009698): the game's 45 is wide enough for 4:3; with an extended
+// draw distance, 65 covers up to 21:9 and the width of a car at the edge.
+// The AI update's mode (func_80032874, called from func_80028604 for each AI car): see the hook in gt64.us.toml.
+static bool ai_update = false;
+
+extern "C" void gt_ai_update_begin(void) {
+    ai_update = true;
+}
+
+extern "C" uint32_t gt_ai_update_mode(uint32_t mode) {
+    if (ai_update && extended_draw_distance()) {
+        mode |= 5u;
+    }
+    return mode;
+}
+
+extern "C" float gt_cone_half_angle(void) {
+    return extended_draw_distance() ? 65.0f : 45.0f;
 }
 
 extern "C" int32_t gt_sections_ahead(uint8_t* rdram, int32_t count) {
@@ -835,6 +862,16 @@ extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
         const double dz = rd64f(rdram, section + 0x18) - rd64f(rdram, cam + 0xE8);
         if (std::max({ std::fabs(dx), std::fabs(dy), std::fabs(dz) }) > max_draw_offset) {
             return;
+        }
+    }
+    {
+        const uint32_t base = rd32(rdram, 0x80114584u);
+        const uint32_t index = (section - base) / 0x28;
+        if (section >= base && index < 0x1000u) {
+            if (section_drawn.size() <= index) {
+                section_drawn.resize(index + 1, 0);
+            }
+            section_drawn[index] = game_frame + 1;
         }
     }
     const uint32_t tail = rd32(rdram, pool_ptr);
@@ -883,6 +920,7 @@ extern "C" void gt_wheel_drawn(uint8_t* rdram) {
 // Cars drawn as bodies alone (+0x119 bit 0x10, 2 to about 5 track sections from the camera) in full instead, see
 // gt64.us.toml. The current car is *D_800DB5D0.
 extern "C" void gt_car_detail(uint8_t* rdram) {
+    ai_update = false;
     const uint32_t car = rd32(rdram, 0x800DB5D0u);
     if (car < 0x80000000u || car >= 0x80800000u) {
         return;
@@ -890,6 +928,17 @@ extern "C" void gt_car_detail(uint8_t* rdram) {
     uint8_t& flags = rdram[((car + 0x119) ^ 3) - 0x80000000u];
     if (!(flags & 0x20)) {
         flags &= uint8_t(~0x10);
+    }
+    // Further out (0x20) the game doesn't draw the car at all, which hid it in the fog of its own draw distance; with an
+    // extended one, cars around that point came and went every few frames. Draw them in full (body-only, without the
+    // wheels that fill the gap under it, a car seemed to hover), but only on a track section drawn this frame or the
+    // last (the car's is +0x16A): one past the end of the track drawn, or on a stretch of it out of sight, seemed to fly
+    // over nothing.
+    else if (extended_draw_distance()) {
+        const uint32_t section = rd16(rdram, car + 0x16A);
+        if (section < section_drawn.size() && section_drawn[section] != 0 && section_drawn[section] >= game_frame) {
+            flags = uint8_t(flags & ~0x30);
+        }
     }
 }
 
@@ -905,6 +954,8 @@ namespace {
         wr32(rdram, 0x8010FFC8u, gfx + 8);
     }
 }
+
+namespace { uint32_t part_obj = 0; }
 
 extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
     part_group_open = false;
@@ -931,10 +982,40 @@ extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
     gfx_put(rdram, 0x6400000Cu, id);                          // gEXMatrixGroupSimple(id, push, modelview, position and
     gfx_put(rdram, 0x00000029u, 0);                           // rotation interpolated, the rest skipped, linear order)
     part_group_open = true;
+    part_obj = obj;
 }
 
 extern "C" void gt_part_end(uint8_t* rdram) {
     if (part_group_open) {
+        static const bool log = std::getenv("GT_PARTLOG") != nullptr;
+        if (log) {
+            // The part's last modelview load, back from here: its translation (camera space) and the object's position.
+            const uint32_t end = rd32(rdram, 0x8010FFC8u);
+            for (uint32_t a = end - 8; a + 0x200 > end; a -= 8) {
+                if ((rd32(rdram, a) >> 24) == 0x01) {
+                    const uint32_t m = 0x80000000u | (rd32(rdram, a + 4) & 0x7FFFFFu);
+                    auto fx = [&](int i) {
+                        const uint32_t hi = rd32(rdram, m + (i / 2) * 4), lo = rd32(rdram, m + 0x20 + (i / 2) * 4);
+                        const int16_t ih = int16_t((i & 1) ? (hi & 0xFFFF) : (hi >> 16));
+                        const uint16_t fl = uint16_t((i & 1) ? (lo & 0xFFFF) : (lo >> 16));
+                        return ih + fl / 65536.0;
+                    };
+                    const uint32_t cam = rd32(rdram, 0x8010FFCCu);
+                    auto rd_double = [](uint8_t* r, uint32_t x) {
+                        const uint64_t bits = (uint64_t(rd32(r, x)) << 32) | rd32(r, x + 4);
+                        double v; std::memcpy(&v, &bits, sizeof(v)); return v;
+                    };
+                    char nm[12] = {};
+                    for (int i = 0; i < 11; i++) nm[i] = char(rdram[((part_obj + 5 + i) ^ 3) - 0x80000000u]);
+                    std::fprintf(stderr, "[part] f%u car%u %s P %.1f %.1f %.1f C %.1f %.1f %.1f M", game_frame, rd16(rdram, part_obj + 2), nm,
+                        rd_double(rdram, part_obj + 0x18), rd_double(rdram, part_obj + 0x20), rd_double(rdram, part_obj + 0x28),
+                        rd_double(rdram, cam + 0xD8), rd_double(rdram, cam + 0xE0), rd_double(rdram, cam + 0xE8));
+                    for (int i = 0; i < 16; i++) std::fprintf(stderr, " %.3f", fx(i));
+                    std::fprintf(stderr, "\n");
+                    break;
+                }
+            }
+        }
         gfx_put(rdram, 0x6400000Du, 1);                       // gEXPopMatrixGroup(modelview)
         part_group_open = false;
     }
