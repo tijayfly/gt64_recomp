@@ -1,5 +1,5 @@
 diff --git a/src/hle/rt64_interpreter.cpp b/src/hle/rt64_interpreter.cpp
-index 99e46ae..5ac0d78 100644
+index 99e46ae..05925c5 100644
 --- a/src/hle/rt64_interpreter.cpp
 +++ b/src/hle/rt64_interpreter.cpp
 @@ -37,8 +37,12 @@ namespace RT64 {
@@ -17,7 +17,7 @@ index 99e46ae..5ac0d78 100644
          }
  
          // GT64's card remap (rt64_vi.h) applies to its 2D tasks only.
-@@ -168,16 +172,53 @@ namespace RT64 {
+@@ -168,16 +172,59 @@ namespace RT64 {
          // Check RDRAM if required.
          state->checkRDRAM();
  
@@ -66,8 +66,29 @@ index 99e46ae..5ac0d78 100644
 +            else if (hleGBI == nullptr) {
 +                // The list loaded a microcode RT64 doesn't know (garbage, coming back from qualifying): stop the task.
 +                fprintf(stderr, "[rt64] task 0x%08X stopped: it loaded an unknown microcode\n", dlStartAdddress);
++                if (dlLog) {
++                    for (uint32_t k = 0; k < 16; k++) {
++                        const uint32_t r = (ringPos + k) & 15;
++                        fprintf(stderr, "[rt64]   %08X: %08X %08X\n", ringAddr[r], ringW0[r], ringW1[r]);
++                    }
++                }
 +                break;
 +            }
              else {
                  func = hleGBI->map[opCode];
  
+diff --git a/src/hle/rt64_rdp.cpp b/src/hle/rt64_rdp.cpp
+index feb26fb..c49c45d 100644
+--- a/src/hle/rt64_rdp.cpp
++++ b/src/hle/rt64_rdp.cpp
+@@ -367,6 +367,10 @@ namespace RT64 {
+     
+     template<bool RGBA32 = false, bool TLUT = false>
+     __forceinline void loadWord(uint8_t *TMEM, uint32_t tmemAddress, uint32_t tmemXorMask, const uint8_t *RDRAM, uint32_t textureAddress) {
++        // Within RDRAM, as the hardware's address wraps: a stale display list (GT64 leaving a race) loaded a TLUT from
++        // far past it and crashed.
++        textureAddress &= 0x7FFFFF;
++
+         // Only sample the first two bytes in TLUT mode.
+         uint32_t offsetMask;
+         if constexpr (TLUT) {

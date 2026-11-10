@@ -57,6 +57,7 @@ extern "C" void gt_on_rom_read(uint32_t rom, uint32_t ram, uint32_t size) {
 
 // Debug: count RSP task types submitted from each site (GT_TASKLOG=1).
 #include <chrono>
+#include <unordered_map>
 #include <cstdlib>
 #include <algorithm>
 extern "C" void gt_debug_task(uint8_t* rdram, uint32_t task, int site) {
@@ -69,7 +70,10 @@ extern "C" void gt_debug_task(uint8_t* rdram, uint32_t task, int site) {
     static const bool all = std::getenv("GT_TASKLOG")[0] == '2';
     if (site == 0 && (all || counts[0][1] % 60 == 1)) {
         auto w = [&](uint32_t off) { return *reinterpret_cast<uint32_t*>(rdram + (task + off - 0x80000000u)); };
-        fprintf(stderr, "[gfxtask] ucode=%08X data_ptr=%08X flags=%08X sc_flags=%08X fb=%08X\n", w(0x10), w(0x30), w(0x4), w(-0x28 + 0x1C), w(-0x28 + 0x20));
+        const uint32_t dl = w(0x30) | 0x80000000u;
+        auto r = [&](uint32_t a) { return (a >= 0x80000000u && a < 0x807FFFF8u) ? *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u)) : 0xDEADBEEFu; };
+        fprintf(stderr, "[gfxtask] ucode=%08X data_ptr=%08X flags=%08X fb=%08X dl %08X %08X %08X %08X wp=%08X idx=%u\n", w(0x10), w(0x30), w(0x4), w(-0x28 + 0x20),
+            r(dl), r(dl + 4), r(dl + 8), r(dl + 12), r(0x8010FFC8u), unsigned(rdram[(0x80119597u ^ 3) - 0x80000000u]));
     }
     auto now = std::chrono::steady_clock::now();
     if (now - last > std::chrono::seconds(1)) {
@@ -1023,8 +1027,14 @@ extern "C" void gt_part_end(uint8_t* rdram) {
 
 // The frame's display list and matrix buffers (D_8010FFC8 and D_8012AF48, just set from buffer index `index`, nothing
 // written yet): in the Expansion Pak.
+namespace {
+    uint32_t ext_gfx_built[2] = {};                     // the frame (game_frame) each buffer was last built on
+    std::unordered_map<uint32_t, uint32_t> ext_task_build; // by a task's display list address: the build it was submitted from
+}
+
 extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
     game_frame++;
+    ext_gfx_built[index & 1] = game_frame;
     views_last_frame = views_this_frame;
     views_this_frame = 0;
     if (extended_draw_distance()) {
@@ -1033,36 +1043,86 @@ extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
     }
 }
 
+// A graphics task submitted (func_80007C80) again from one of the Expansion Pak display list buffers without the buffer
+// having been built again: leaving a race, GT64 submits its last race frame once more after the next screen's data has
+// been loaded over the cars' and track's (on the N64 its own buffer has been rewritten by then). Its display list then
+// ran into that data, and the renderer crashed or stopped drawing. It's emptied instead (G_ENDDL).
+extern "C" void gt_gfx_task_check(uint8_t* rdram, uint32_t task) {
+    if (rd32(rdram, task) != 1) return;  // M_GFXTASK
+    const uint32_t dl = rd32(rdram, task + 0x30) | 0x80000000u;
+    if (dl < ext_gfx || dl >= ext_gfx + 2 * ext_gfx_size) return;
+    const uint32_t build = ext_gfx_built[(dl - ext_gfx) / ext_gfx_size];
+    auto it = ext_task_build.find(dl);
+    if (it != ext_task_build.end() && it->second == build) {
+        static const bool log = std::getenv("GT_TASKLOG") != nullptr;
+        if (log) std::fprintf(stderr, "[gfxtask] task 0x%08X submitted again from build f%u: emptied\n", dl, build);
+        wr32(rdram, dl, 0xB8000000u);
+        wr32(rdram, dl + 4, 0);
+        return;
+    }
+    ext_task_build[dl] = build;
+}
+
 // Track geometry is streamed: each section's chunk (segment 0x0B, a slice of one contiguous block of ROM) is DMAed into a
 // cache slot only while it's near the camera, and its entry in the chunk table (D_80160950, 20 bytes: RAM address or -1,
 // ROM address, size, offset in the segment, slot size) says where; func_8000A570 sets segment 0x0B to RAM address -
 // offset for each node. Past the game's own range a chunk is either not loaded or its entry still names a slot that has
 // since been refilled with another chunk, so with the extended draw distance every node draws from a copy of the whole
-// block in the Expansion Pak, read once per track (it's the same data the game loads).
+// block in the Expansion Pak, read once per track (it's the same data the game loads) and checked against the ROM a slice each frame.
 extern "C" void gt_track_segment(uint8_t* rdram, recomp_context* ctx) {
     if (!extended_draw_distance()) {
         return;
     }
-    // The block's ROM address, from any chunk that's loaded.
+    // The block's ROM address: from this node's own chunk entry (v1) when it's filled in (its ROM address less its offset
+    // in the block). At the start of a race the entries of chunks not loaded yet are still blank (RAM -1, ROM 0), and
+    // the game's own segment for them, -1, ran the track's display list into code (RT64 then stopped every task: no
+    // track, then a crash). The node's list addresses are offsets in the block, so it draws from the copy all the same:
+    // one taken from any chunk that is loaded, or the copy already taken.
+    const auto rom = recomp::get_rom();
+    const uint32_t entry = uint32_t(ctx->r3);
     uint32_t rom_base = 0;
-    for (uint32_t i = 0; i < 512; i++) {
-        const uint32_t entry = chunk_table + i * 20;
-        const uint32_t ram = rd32(rdram, entry);
-        if (ram != 0xFFFFFFFFu && ram >= 0x80000000u && rd32(rdram, entry + 4) != 0) {
-            rom_base = rd32(rdram, entry + 4) - rd32(rdram, entry + 12);
-            break;
+    if (entry >= chunk_table && entry < chunk_table + 512 * 20 && rd32(rdram, entry + 4) != 0) {
+        rom_base = rd32(rdram, entry + 4) - rd32(rdram, entry + 12);
+    }
+    for (uint32_t i = 0; (rom_base == 0 || rom_base >= rom.size()) && (i < 512); i++) {
+        const uint32_t e = chunk_table + i * 20;
+        if (rd32(rdram, e) != 0xFFFFFFFFu && rd32(rdram, e + 4) != 0) {
+            rom_base = rd32(rdram, e + 4) - rd32(rdram, e + 12);
         }
     }
-    const auto rom = recomp::get_rom();
+    if (rom_base == 0 || rom_base >= rom.size()) {
+        rom_base = ext_track_rom;
+    }
     if (rom_base == 0 || rom_base >= rom.size()) {
         return;
     }
-    if (rom_base != ext_track_rom) {
-        const size_t size = std::min<size_t>(ext_track_size, rom.size() - rom_base);
-        for (size_t i = 0; i < size; i++) {
+    const size_t size = std::min<size_t>(ext_track_size, rom.size() - rom_base);
+    auto copy = [&](size_t from, size_t to) {
+        for (size_t i = from; i < to; i++) {
             rdram[((ext_track + i) ^ 3) - 0x80000000u] = rom[rom_base + i];
         }
+    };
+    static uint32_t verified_frame = 0;
+    static size_t verify_at = 0;
+    if (rom_base != ext_track_rom) {
+        copy(0, size);
+        std::fprintf(stderr, "[track] geometry copied from ROM 0x%08X (0x%zX bytes)%s\n", rom_base, size,
+            (ext_track_rom != 0) ? ", replacing another track's" : "");
         ext_track_rom = rom_base;
+        verify_at = 0;
+    } else if (verified_frame != game_frame) {
+        // Once a frame, check the next 128 KB of the copy against the ROM (all of it about every 1 s): anything that
+        // overwrote it would leave the track drawing garbage or nothing for the rest of the session.
+        verified_frame = game_frame;
+        const size_t end = std::min(size, verify_at + 0x20000);
+        for (size_t i = verify_at; i < end; i++) {
+            if (rdram[((ext_track + i) ^ 3) - 0x80000000u] != rom[rom_base + i]) {
+                std::fprintf(stderr, "[track] geometry copy damaged at +0x%zX: copied again\n", i);
+                copy(0, size);
+                break;
+            }
+        }
+        verify_at = (end >= size) ? 0 : end;
     }
     ctx->r8 = int32_t(ext_track);
     ctx->r9 = 0;
