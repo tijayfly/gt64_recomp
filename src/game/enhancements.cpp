@@ -751,6 +751,12 @@ namespace {
         wr32(rdram, a, uint32_t(bits >> 32));
         wr32(rdram, a + 4, uint32_t(bits));
     }
+    float rd32f(uint8_t* rdram, uint32_t a) {
+        const uint32_t bits = rd32(rdram, a);
+        float f;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    }
     void wr32f(uint8_t* rdram, uint32_t a, float f) {
         uint32_t bits;
         std::memcpy(&bits, &f, sizeof(f));
@@ -1568,3 +1574,124 @@ extern "C" void gt_section_result(uint8_t* rdram, recomp_context* ctx) {
         ctx->r2 = 1;
     }
 }
+
+// Reduce AI Aggression (General > Reduce AI Aggression). Opponents don't drive with the car physics: each step of
+// the car update, func_80028520 runs one along its line (its record, D_80162758 + (id - 1) * 0xA8, has its speed in units per
+// move at +0x54) and func_800276E4 then moves it that far. Just before the move, an opponent within a section of a
+// player's car that's ahead of it and less than a car's width to the side of its heading (its last move) is held to
+// the player's own speed along it, plus what keeps it from closing in to under ai_gap within ai_horizon moves: it
+// brakes rather than drive into the player. Held back to under half its speed for over ~3 s (the player stopped on
+// its line), it's let go.
+namespace {
+    constexpr double ai_gap = 300.0;     // from the opponent's centre to the player's, along its heading (a car is ~230 long)
+    constexpr double ai_width = 110.0;   // to the side (a car is ~100 wide)
+    constexpr double ai_horizon = 24.0;  // moves ahead (the game moves opponents about 4 times a frame)
+    constexpr uint32_t ai_hold_limit = 90; // frames (3 s)
+    struct AiState {
+        double x = 0.0, z = 0.0;         // position before this frame's move
+        double dx = 0.0, dz = 0.0;       // heading: the last move, normalised
+        bool heading = false;
+        uint32_t held_since = 0;         // the frame (game_frame) it was first held back to under half its speed, or 0
+        uint32_t moves = 0;              // this opponent's moves so far
+        double px[9] = {}, pz[9] = {};   // each player's position at its previous move, by id
+        uint32_t seen[9] = {};           // the move (moves) those were taken on
+    };
+    std::unordered_map<uint32_t, AiState> ai_states;   // by object
+
+    uint32_t object_of_id(uint8_t* rdram, int id) {
+        const uint32_t base = rd32(rdram, 0x800DB5DCu);
+        if (base < 0x80000000u || base >= 0x80800000u) return 0;
+        for (uint32_t i = 0; i < 8; i++) {
+            const uint32_t obj = base + i * 0x1A0;
+            if (rd16(rdram, obj + 0x22) == uint32_t(id)) return obj;
+        }
+        return 0;
+    }
+}
+
+extern "C" void gt_ai_before_move(uint8_t* rdram, uint32_t rec) {
+    const uint32_t obj = rd32(rdram, 0x800DB5D0u);
+    if (obj < 0x80000000u || obj >= 0x80800000u) return;
+    AiState& ai = ai_states[obj];
+    const double ax = rd64f(rdram, obj + 0x40), az = rd64f(rdram, obj + 0x50);
+    ai.x = ax;
+    ai.z = az;
+    if (gt::get_reduce_ai_aggression() != gt::ReduceAiAggression::On || !ai.heading) return;
+    const float speed = rd32f(rdram, rec + 0x54);
+    if (!(speed > 0.0f)) return;
+    const int ring = std::max(section_ring(rdram), 1);
+    const int ai_section = rd16(rdram, obj + 0x16A);
+    double allowed = speed;
+    double nearest_gap = 0.0;
+    int player_id = 0;
+    ai.moves++;
+    for (int id = 1; id <= 8; id++) {
+        const uint32_t player = object_of_id(rdram, id);
+        if (player == 0 || player == obj || !controller_car(0x80162E20u + uint32_t(id - 1) * 0x3F0u)) continue;
+        const double px = rd64f(rdram, player + 0x40), pz = rd64f(rdram, player + 0x50);
+        // The player's own move since this opponent's previous one, along its heading.
+        double player_speed = 0.0;
+        if (ai.seen[id] + 1 == ai.moves) {
+            const double mx = px - ai.px[id], mz = pz - ai.pz[id];
+            if (mx * mx + mz * mz < 500.0 * 500.0) {
+                player_speed = std::max(0.0, mx * ai.dx + mz * ai.dz);  // not slowed further for a player coming towards it
+            }
+        }
+        ai.px[id] = px;
+        ai.pz[id] = pz;
+        ai.seen[id] = ai.moves;
+        int dsec = std::abs(int(rd16(rdram, player + 0x16A)) - ai_section);
+        dsec = std::min(dsec, ring - dsec);
+        if (dsec > 1) continue;
+        const double rx = px - ax, rz = pz - az;
+        const double along = rx * ai.dx + rz * ai.dz;
+        const double side = std::fabs(rx * ai.dz - rz * ai.dx);
+        if (along <= 0.0 || side > ai_width) continue;
+        // As fast as keeps it from closing in to under ai_gap within ai_horizon moves.
+        const double keep = std::max(0.0, player_speed + (along - ai_gap) / ai_horizon);
+        if (keep < allowed) {
+            allowed = keep;
+            nearest_gap = along;
+            player_id = id;
+        }
+    }
+    if (allowed >= speed * 0.5) {
+        ai.held_since = 0;
+    }
+    else if (ai.held_since == 0) {
+        ai.held_since = game_frame;
+    }
+    else if (game_frame - ai.held_since > ai_hold_limit) {
+        return;
+    }
+    if (allowed >= speed) {
+        return;
+    }
+    static const bool log = std::getenv("GT_AIBRAKE_LOG") != nullptr;
+    if (log) {
+        std::fprintf(stderr, "[ai] f%u car %d behind player %d by %.0f: speed %.1f -> %.1f (held since f%u)\n", game_frame,
+            int(rd16(rdram, obj + 0x22)), player_id, nearest_gap, speed, allowed, ai.held_since);
+    }
+    wr32f(rdram, rec + 0x54, float(allowed));
+}
+
+// After an opponent's move (func_80028604's start): its heading for the next frame.
+extern "C" void gt_ai_after_move(uint8_t* rdram) {
+    const uint32_t obj = rd32(rdram, 0x800DB5D0u);
+    auto it = ai_states.find(obj);
+    if (it == ai_states.end()) return;
+    AiState& ai = it->second;
+    const double mx = rd64f(rdram, obj + 0x40) - ai.x, mz = rd64f(rdram, obj + 0x50) - ai.z;
+    const double len = std::sqrt(mx * mx + mz * mz);
+    // A jump (a new race, a reset) leaves no heading; standing still (held back) keeps the last one.
+    if (len >= 500.0) {
+        ai.heading = false;
+        ai.held_since = 0;
+    }
+    else if (len > 0.5) {
+        ai.heading = true;
+        ai.dx = mx / len;
+        ai.dz = mz / len;
+    }
+}
+

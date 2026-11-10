@@ -88,10 +88,27 @@ static void add_general_options(recomp::config::Config &config) {
         slip_rumble_options,
         gt::SlipRumble::On
     );
+
+    static EnumOptionVector reduce_ai_aggression_options = {
+        {gt::ReduceAiAggression::Off, "Off", "Off"},
+        {gt::ReduceAiAggression::On, "On", "On"},
+    };
+    config.add_enum_option(
+        gt::configkeys::general::reduce_ai_aggression,
+        "Reduce AI Aggression",
+        "<recomp-color primary>On</recomp-color>: Opponents brake instead of driving into your car. "
+        "<recomp-color primary>Off</recomp-color>: Keeps the game's original AI.",
+        reduce_ai_aggression_options,
+        gt::ReduceAiAggression::On
+    );
 }
 
 gt::SlipRumble gt::get_slip_rumble() {
     return static_cast<gt::SlipRumble>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::slip_rumble)));
+}
+
+gt::ReduceAiAggression gt::get_reduce_ai_aggression() {
+    return static_cast<gt::ReduceAiAggression>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::reduce_ai_aggression)));
 }
 
 gt::AutoGearbox gt::get_auto_gearbox() {
