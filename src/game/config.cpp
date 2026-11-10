@@ -109,7 +109,7 @@ static void add_general_options(recomp::config::Config &config) {
     config.add_enum_option(
         gt::configkeys::general::traction_control,
         "Traction Control",
-        "<recomp-color primary>On</recomp-color>: Manages power application to prevent wheelspin and oversteer. "
+        "<recomp-color primary>On</recomp-color>: Adjusts throttle when slip is detected to minimise wheelspin and oversteer. "
         "<recomp-color primary>Off</recomp-color>: Keeps the game's original handling.",
         traction_control_options,
         gt::TractionControl::Off
