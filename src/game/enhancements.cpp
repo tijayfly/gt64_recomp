@@ -1084,16 +1084,24 @@ extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
     auto mix = [&](uint8_t b) { id = (id ^ b) * 16777619u; };
     const uint16_t car = rd16(rdram, obj + 2);
     mix(uint8_t(car)); mix(uint8_t(car >> 8));
+    char name[12] = {};
     for (uint32_t i = 5; i < 16; i++) {
         const uint8_t c = rdram[((obj + i) ^ 3) - 0x80000000u];
         if (c == 0) break;
         mix(c);
+        name[i - 5] = char(c);
     }
+    // A wheel turns a long way between frames (spinning, and more so in a wheelspin or slide): interpolating its matrix
+    // component by component shrank it on the frames drawn in between (the in-between of two rotations is a smaller
+    // matrix), so the wheels pulsed in size. Wheels are decomposed instead: rotation interpolated as a rotation, scale
+    // on its own.
+    const bool wheel = std::strstr(name, "TIRE") != nullptr;
     id |= 0x80000000u;   // never G_EX_ID_IGNORE (0) or G_EX_ID_AUTO (0xFFFFFFFF)
     if (id == 0xFFFFFFFFu) id = 0x80000001u;
     gfx_put(rdram, 0x00525464u, (0x1u << 28) | 0x64u);       // enable the extended GBI at opcode 0x64
     gfx_put(rdram, 0x6400000Cu, id);                          // gEXMatrixGroupSimple(id, push, modelview, position and
-    gfx_put(rdram, 0x00000029u, 0);                           // rotation interpolated, the rest skipped, linear order)
+    // rotation interpolated, the rest skipped, linear order); wheels gEXMatrixGroupDecomposed with scale interpolated too
+    gfx_put(rdram, wheel ? 0x000000ADu : 0x00000029u, 0);
     part_group_open = true;
     part_obj = obj;
 }
