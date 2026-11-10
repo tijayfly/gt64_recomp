@@ -1038,31 +1038,48 @@ extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
 // ROM address, size, offset in the segment, slot size) says where; func_8000A570 sets segment 0x0B to RAM address -
 // offset for each node. Past the game's own range a chunk is either not loaded or its entry still names a slot that has
 // since been refilled with another chunk, so with the extended draw distance every node draws from a copy of the whole
-// block in the Expansion Pak, read once per track (it's the same data the game loads).
+// block in the Expansion Pak, read once per track (it's the same data the game loads) and checked against the ROM a slice each frame.
 extern "C" void gt_track_segment(uint8_t* rdram, recomp_context* ctx) {
     if (!extended_draw_distance()) {
         return;
     }
-    // The block's ROM address, from any chunk that's loaded.
-    uint32_t rom_base = 0;
-    for (uint32_t i = 0; i < 512; i++) {
-        const uint32_t entry = chunk_table + i * 20;
-        const uint32_t ram = rd32(rdram, entry);
-        if (ram != 0xFFFFFFFFu && ram >= 0x80000000u && rd32(rdram, entry + 4) != 0) {
-            rom_base = rd32(rdram, entry + 4) - rd32(rdram, entry + 12);
-            break;
-        }
+    // The block's ROM address, from this node's own chunk entry (v1: its ROM address less its offset in the block).
+    const uint32_t entry = uint32_t(ctx->r3);
+    if (entry < chunk_table || entry >= chunk_table + 512 * 20) {
+        return;
     }
+    const uint32_t rom_base = rd32(rdram, entry + 4) - rd32(rdram, entry + 12);
     const auto rom = recomp::get_rom();
     if (rom_base == 0 || rom_base >= rom.size()) {
         return;
     }
-    if (rom_base != ext_track_rom) {
-        const size_t size = std::min<size_t>(ext_track_size, rom.size() - rom_base);
-        for (size_t i = 0; i < size; i++) {
+    const size_t size = std::min<size_t>(ext_track_size, rom.size() - rom_base);
+    auto copy = [&](size_t from, size_t to) {
+        for (size_t i = from; i < to; i++) {
             rdram[((ext_track + i) ^ 3) - 0x80000000u] = rom[rom_base + i];
         }
+    };
+    static uint32_t verified_frame = 0;
+    static size_t verify_at = 0;
+    if (rom_base != ext_track_rom) {
+        copy(0, size);
+        std::fprintf(stderr, "[track] geometry copied from ROM 0x%08X (0x%zX bytes)%s\n", rom_base, size,
+            (ext_track_rom != 0) ? ", replacing another track's" : "");
         ext_track_rom = rom_base;
+        verify_at = 0;
+    } else if (verified_frame != game_frame) {
+        // Once a frame, check the next 128 KB of the copy against the ROM (all of it about every 1 s): anything that
+        // overwrote it would leave the track drawing garbage or nothing for the rest of the session.
+        verified_frame = game_frame;
+        const size_t end = std::min(size, verify_at + 0x20000);
+        for (size_t i = verify_at; i < end; i++) {
+            if (rdram[((ext_track + i) ^ 3) - 0x80000000u] != rom[rom_base + i]) {
+                std::fprintf(stderr, "[track] geometry copy damaged at +0x%zX: copied again\n", i);
+                copy(0, size);
+                break;
+            }
+        }
+        verify_at = (end >= size) ? 0 : end;
     }
     ctx->r8 = int32_t(ext_track);
     ctx->r9 = 0;
