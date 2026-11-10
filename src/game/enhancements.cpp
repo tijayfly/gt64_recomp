@@ -41,6 +41,10 @@ namespace {
     constexpr uint32_t ovl_front_text_size = 0xE57A0 - 0xC7920;
     bool ovl_front_loaded = false;
     uint32_t front_overlay_loads = 0;   // times the front-end overlay has been read in (leaving a race, among others)
+    // The display list buffer being built (gt_matrix_buffer), and for each, whether it drew a race view while the
+    // front-end overlay was in (over the race's data): a race frame built after leaving the race.
+    uint32_t building_buffer = 0;
+    bool ext_gfx_stale_race[2] = {};
 }
 
 extern "C" void gt_on_rom_read(uint32_t rom, uint32_t ram, uint32_t size) {
@@ -877,6 +881,9 @@ extern "C" void gt_view_start(uint8_t* rdram, uint32_t view) {
 
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     original_behind = count;
+    if (ovl_front_loaded) {
+        ext_gfx_stale_race[building_buffer] = true;
+    }
     frame_start_section = int16_t(rd16(rdram, rd32(rdram, 0x8010FFCCu) + 0xF8));
     views_this_frame++;
     track_views++;
@@ -1150,6 +1157,8 @@ extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
     game_frame++;
     ext_gfx_built[index & 1] = game_frame;
     ext_gfx_loads[index & 1] = front_overlay_loads;
+    building_buffer = index & 1;
+    ext_gfx_stale_race[index & 1] = false;
     views_last_frame = views_this_frame;
     views_this_frame = 0;
     if (extended_draw_distance()) {
@@ -1172,7 +1181,10 @@ extern "C" void gt_gfx_task_check(uint8_t* rdram, uint32_t task) {
     // Also any task from a buffer built before the front-end overlay was last read in: leaving a race, the game submits
     // the frame it was building (its HUD list still the last frame's, calling into race data the next screen's has
     // since replaced) after loading it.
-    if ((it != ext_task_build.end() && it->second == build) || (ext_gfx_loads[buffer] != front_overlay_loads)) {
+    // And any from a buffer that drew a race view after the front-end overlay was read in: the game can still build a
+    // race frame or two then, from race data the overlay and the next screen's data are replacing.
+    if ((it != ext_task_build.end() && it->second == build) || (ext_gfx_loads[buffer] != front_overlay_loads) ||
+        ext_gfx_stale_race[buffer]) {
         static const bool log = std::getenv("GT_TASKLOG") != nullptr;
         if (log) std::fprintf(stderr, "[gfxtask] task 0x%08X stale (built on f%u): emptied\n", dl, build);
         wr32(rdram, dl, 0xB8000000u);
