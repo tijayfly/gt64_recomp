@@ -31,16 +31,14 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 - [x] libultra functions named (156), so the runtime can replace them
 - [x] Plays through the licence, logos, intro, title, menus and races, with audio
 - [x] Championship and time trial setup, pause menu; logos and menus unfiltered, as on the N64
-- [x] Replays, including runs driven with analog pedals (the pedal amounts are kept for the session, so a replay
-  from before a restart plays back with on/off pedals)
+- [x] Replays, including runs driven with analog pedals
 - [x] HUD, unfiltered: rev counter needle and track map (rotated S2DEX sprites); start lights placed for the
   full-frame race view
 - [x] Skies, filtered, including the intro's split-screen views
 - [x] Gamepad and keyboard defaults for racing: triggers for throttle/brake (analog), shoulders shift
 - [x] Windows x64 build (cross-compiled, see [docs/WINDOWS_CROSS.md](docs/WINDOWS_CROSS.md))
 - [x] Track seams: cracks between polygons filled at high resolution, with or without MSAA, including the wider
-  ones close to the camera and in replays. A few larger gaps in the track models are left as they are (they're in
-  the original too)
+  ones close to the camera and in replays.
 - [x] Custom app icon
 - [x] Rumble: strength in General > Rumble Strength (0 turns it off)
 - [x] Saves: each controller has a Controller Pak and a Rumble Pak at once, so there's nothing to swap: saving and
@@ -49,11 +47,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
 
 ## Enhancements
 
-- **Widescreen races.** The race view fills the screen: the game draws its 3D in a 280x208 window inside a black
-  border, which is widened to the full frame, and the sky wraps out to the window's edges. The HUD keeps its 4:3
-  layout.
-- **Full-frame 4:3 screens.** The logos, title and menus are laid out in a 288x208 box inside a black border. They
-  are stretched to fill the 4:3 frame and pillarboxed. The switch between pillarbox and widescreen happens on black
+- **Widescreen races.** The race view fills the screen, and the HUD keeps its 4:3 layout.
+- **Full-frame 4:3 screens.** The logos, title and menus are pillarboxed inside a black border. The switch between pillarbox and widescreen happens on black
   frames, so going into and out of races is clean.
 - **Analog throttle and brake.** With General > Analog Triggers on (the default), the throttle and brake follow how
   far the triggers (or any analog input bound to A and B) are pressed, on top of the game's own pedal ramp.
@@ -69,17 +64,15 @@ for rendering. It is not an emulator: the game runs as a native program. The app
     shadows and scenery drawn as far as the track reaches.
   - *Original*: the game's own ranges.
 
-  Extended and Maximum also draw the most detailed track models at any distance, move the far plane out with fog and
-  weather left where they were, and draw scenery at the edges of the widescreen view, which the game culled with a
-  view cone sized for 4:3. Opponents are drawn in full on all of the track drawn, and follow its hills at any distance.
-- **Depth of field.** Graphics > Depth of Field (on by default): with an extended draw distance, the distance blurs
-  past where the original draw distance ended.
+  Extended and Maximum also draw the most detailed track models at any distance.
+- **Depth of field.** Graphics > Depth of Field (on by default): with an extended draw distance, the depth of field
+  scales accordingly.
 - **Motion blur.** Graphics > Motion Blur (on by default): in races, the track and scenery blur as the camera moves
   past them. The cars stay sharp. Off while Framerate is *Original*.
 - **HD wheels.** Graphics > HD Wheels (on by default): the cars' six-sided wheels are replaced with modelled ones,
   round tyres and five-spoke alloy rims. *Off* keeps the original wheels.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black, in races and the intro.
-- **N64-era shortcuts fixed.** Opponents keep their wheels and shadows instead of switching them on and off
+- **N64-era limitations fixed.** Opponents keep their wheels and shadows instead of switching them on and off
   with distance, and wheels no longer show a stale position for a frame when they reappear.
 - **Any resolution.** RT64 renders at the window's resolution.
 - **Uncapped framerate.** Graphics > Framerate: *Display* runs races at the display's refresh rate (60, 120, 144 Hz
