@@ -150,6 +150,27 @@ void gt::widescreen_on_vi() {
             *left = 0x76;
         }
     }
+    // Game Over credits (front-end overlay page at 0x801C9860): two 0x50-byte lines, each u16 x, u16 y, pad, then the
+    // text three times in 24-byte slots. Replaced once the overlay is loaded; the font is fixed-width, about 9 px a char.
+    {
+        auto byte_at = [rdram](uint32_t addr) -> uint8_t& { return reinterpret_cast<uint8_t&>(rdram[(addr ^ 3) - 0x80000000u]); };
+        auto matches = [&](uint32_t addr, const char* s) {
+            for (; *s; ++s, ++addr) if (byte_at(addr) != uint8_t(*s)) return false;
+            return true;
+        };
+        auto set_line = [&](uint32_t line, uint16_t x, const char* text) {
+            *reinterpret_cast<uint16_t*>(rdram + ((line ^ 2) - 0x80000000u)) = x;
+            for (uint32_t slot = 0; slot < 3; ++slot) {
+                const uint32_t base = line + 8 + slot * 24;
+                for (uint32_t i = 0; i < 24; ++i) byte_at(base + i) = 0;
+                for (uint32_t i = 0; text[i] && i < 23; ++i) byte_at(base + i) = uint8_t(text[i]);
+            }
+        };
+        if (matches(0x801C9868u, " GT ASSOCIATION") && matches(0x801C98B8u, "IMAGINEER CO.,LTD.")) {
+            set_line(0x801C9860u, 106, "PC PORT BY");
+            set_line(0x801C98B0u, 115, "TIJAYFLY");
+        }
+    }
     const uint32_t mode = *reinterpret_cast<uint32_t*>(rdram + (mode_func_ptr - 0x80000000u));
     static uint32_t last_mode = 0;
     if (mode != last_mode) {
