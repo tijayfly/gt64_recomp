@@ -96,8 +96,7 @@ static void add_general_options(recomp::config::Config &config) {
     config.add_enum_option(
         gt::configkeys::general::reduce_ai_aggression,
         "Reduce AI Aggression",
-        "<recomp-color primary>On</recomp-color> makes opponents brake instead of driving into your car. "
-        "<recomp-color primary>Off</recomp-color> keeps the game's original AI.",
+        "Opponents brake instead of driving into your car.",
         reduce_ai_aggression_options,
         gt::ReduceAiAggression::On
     );
