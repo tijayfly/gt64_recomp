@@ -793,6 +793,9 @@ namespace {
     }
 
     int32_t original_behind = 0; // sections the game itself draws behind (gt_sections_behind's count)
+    // Track sections added and dropped (too far from the camera) on the frame being built, and its views' start section.
+    uint32_t frame_sections_added = 0, frame_sections_dropped = 0;
+    int32_t frame_start_section = -1;
     // Its reach in the camera's direction facing forward (11 ahead, 1 behind); facing backward it draws 7 behind and 1
     // ahead.
     int32_t original_forward = 0;
@@ -812,6 +815,7 @@ namespace {
 
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     original_behind = count;
+    frame_start_section = int16_t(rd16(rdram, rd32(rdram, 0x8010FFCCu) + 0xF8));
     views_this_frame++;
     track_views++;
     // Objects outside the track ring (the cars, their wheels and shadows, and trackside scenery: each frame's object
@@ -896,8 +900,10 @@ extern "C" void gt_add_section(uint8_t* rdram, uint32_t section) {
         const double dy = rd64f(rdram, section + 0x10) - rd64f(rdram, cam + 0xE0);
         const double dz = rd64f(rdram, section + 0x18) - rd64f(rdram, cam + 0xE8);
         if (std::max({ std::fabs(dx), std::fabs(dy), std::fabs(dz) }) > max_draw_offset) {
+            frame_sections_dropped++;
             return;
         }
+        frame_sections_added++;
     }
     {
         const uint32_t base = rd32(rdram, 0x80114584u);
@@ -1064,6 +1070,20 @@ namespace {
 }
 
 extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
+    // A race view last frame that drew no track at all (the game's own sections all too far from the camera): logged,
+    // a few times a race, with where the camera was and the section the game started from.
+    if (views_this_frame > 0 && frame_sections_added == 0) {
+        static uint32_t logged = 0, logged_ring = 0;
+        const uint32_t ring_base = rd32(rdram, 0x80114584u);
+        if (ring_base != logged_ring) { logged_ring = ring_base; logged = 0; }
+        if (logged++ < 10) {
+            const uint32_t cam = rd32(rdram, 0x8010FFCCu);
+            std::fprintf(stderr, "[track] f%u no track drawn: start section %d of %d, %u dropped, camera %.0f %.0f %.0f\n", game_frame,
+                frame_start_section, section_ring(rdram), frame_sections_dropped, rd64f(rdram, cam + 0xD8), rd64f(rdram, cam + 0xE0), rd64f(rdram, cam + 0xE8));
+        }
+    }
+    frame_sections_added = 0;
+    frame_sections_dropped = 0;
     game_frame++;
     ext_gfx_built[index & 1] = game_frame;
     views_last_frame = views_this_frame;
@@ -1363,5 +1383,126 @@ void gt::rumble_on_vi() {
             p = SlipRumblePort{ p.game_on, false, p.applied };
             apply_rumble(port);
         }
+    }
+}
+
+// Track position (func_8003EE1C, see gt64.us.toml). Each tracked point (a car's, the camera's) keeps the track
+// polygon it's on; the track is ~10-20 polygons across per section (the polygon's id, its record's u16 & 0x3FF, is the
+// section: the car's +0x16A), numbered along the track. When a point leaves its polygon the game tries those up to 69
+// either side, in D_800949B0's order (0 to 19 ahead first, then back), and takes the first that holds it
+// (func_8003E610 returns 1 for not in it). Moving on is never more than a section a step, so a first match more than
+// one section from the point's own is a polygon overlapping it from another part of the track: the nearest-section
+// match that also holds it is taken instead, and with none, the point keeps its polygon (as off the track) until it's
+// back on one nearby or ~1 s has passed. Matches within a section are the game's own, so normal driving is unchanged.
+extern "C" void func_8003E610(uint8_t* rdram, recomp_context* ctx);
+
+namespace {
+    constexpr int section_jump_limit = 1;   // sections a step
+    constexpr uint32_t section_lost_limit = 90; // searches a point keeps its polygon through, rejecting only far matches
+    uint8_t section_before[0x48];           // the entry before this candidate's test
+    uint32_t section_entry = 0;
+    uint32_t section_track = 0;
+    int section_delta = 0;
+    bool section_decided = false;           // this search has been resolved (section_choice)
+    int section_choice = 0;                 // the candidate delta to accept, or INT_MIN for none
+    struct PointState {
+        uint32_t lost = 0;                  // consecutive searches with only far matches rejected
+    };
+    std::unordered_map<uint32_t, PointState> section_points;
+
+    uint32_t polygon_count(uint8_t* rdram) { return rd16(rdram, section_track); }
+    uint32_t polygon_id(uint8_t* rdram, uint32_t poly) { return rd16(rdram, rd32(rdram, section_track + 8) + poly * 32) & 0x3FF; }
+    uint32_t polygon_of(const uint8_t* entry) { return (*reinterpret_cast<const uint32_t*>(entry) << 7) >> 21; }
+
+    // Sections between two ids, around the lap (ids run 1 to the last).
+    int section_distance(uint8_t* rdram, uint32_t a, uint32_t b) {
+        static uint32_t measured = 0;
+        static int lowest = 0, highest = 0;
+        if (measured != section_track) {
+            measured = section_track;
+            lowest = 0x3FF;
+            highest = 0;
+            for (uint32_t i = 0; i < polygon_count(rdram); i++) {
+                lowest = std::min<int>(lowest, polygon_id(rdram, i));
+                highest = std::max<int>(highest, polygon_id(rdram, i));
+            }
+        }
+        const int span = highest - lowest + 1;
+        int d = std::abs(int(a) - int(b));
+        return (span > 0) ? std::min(d, span - d) : d;
+    }
+
+    uint32_t candidate_polygon(uint32_t from, int delta, uint32_t n) {
+        return uint32_t(((int(from) + delta) % int(n) + int(n)) % int(n));
+    }
+}
+
+extern "C" void gt_section_try(uint8_t* rdram, recomp_context* ctx) {
+    section_entry = uint32_t(ctx->r19);
+    section_delta = int16_t(rd16(rdram, uint32_t(ctx->r17)));
+    section_track = rd32(rdram, uint32_t(ctx->r20) + 4);
+    if (uint32_t(ctx->r18) == 0) {  // the first candidate (the point's own polygon): a new search
+        section_decided = false;
+    }
+    std::memcpy(section_before, rdram + (section_entry - 0x80000000u), sizeof(section_before));
+}
+
+extern "C" void gt_section_result(uint8_t* rdram, recomp_context* ctx) {
+    if (uint32_t(ctx->r2) == 1 || section_delta == 0 || polygon_count(rdram) == 0) {
+        return;
+    }
+    uint8_t* const entry = rdram + (section_entry - 0x80000000u);
+    const uint32_t n = polygon_count(rdram);
+    const uint32_t own = polygon_of(section_before);
+    const uint32_t own_id = polygon_id(rdram, own);
+    PointState& point = section_points[section_entry];
+    if (!section_decided) {
+        section_decided = true;
+        section_choice = section_delta;
+        const int distance = section_distance(rdram, own_id, polygon_id(rdram, candidate_polygon(own, section_delta, n)));
+        if (distance > section_jump_limit) {
+            // Test the rest of this search's candidates on copies of the entry for a nearer one.
+            uint8_t after[0x48];
+            std::memcpy(after, entry, sizeof(after));
+            const uint32_t row = 0x800949B0u + (section_before[3] >> 7) * 0x116;  // by the direction bit (word bit 31)
+            int best = section_delta, best_distance = distance;
+            bool past = false;
+            for (uint32_t i = 0; i < 0x116 / 2; i++) {
+                const int delta = int16_t(rd16(rdram, row + i * 2));
+                if (!past) { past = (delta == section_delta); continue; }  // earlier ones didn't hold it
+                const uint32_t poly = candidate_polygon(own, delta, n);
+                const int d = section_distance(rdram, own_id, polygon_id(rdram, poly));
+                if (d >= best_distance) continue;
+                std::memcpy(entry, section_before, sizeof(section_before));
+                recomp_context test = *ctx;
+                test.r4 = int32_t(rd32(rdram, section_track + 4));
+                test.r5 = int32_t(rd32(rdram, section_track + 8) + poly * 32);
+                test.r6 = int32_t(section_entry);
+                func_8003E610(rdram, &test);
+                if (uint32_t(test.r2) != 1) {
+                    best = delta;
+                    best_distance = d;
+                }
+            }
+            std::memcpy(entry, after, sizeof(after));
+            if (best_distance > section_jump_limit && point.lost < section_lost_limit) {
+                section_choice = INT32_MIN;  // keep its polygon
+                point.lost++;
+            } else {
+                section_choice = best;
+            }
+            static uint32_t logged = 0;
+            if (logged++ < 50) {
+                std::fprintf(stderr, "[track] f%u point %08X section %u: first match %+d (%d sections) -> %s %+d\n", game_frame,
+                    section_entry, own_id, section_delta, distance, (section_choice == INT32_MIN) ? "kept, best" : "took", best);
+            }
+        }
+        if (section_choice != INT32_MIN && section_distance(rdram, own_id, polygon_id(rdram, candidate_polygon(own, section_choice, n))) <= section_jump_limit) {
+            point.lost = 0;
+        }
+    }
+    if (section_delta != section_choice) {
+        std::memcpy(entry, section_before, sizeof(section_before));
+        ctx->r2 = 1;
     }
 }

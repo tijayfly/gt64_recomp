@@ -261,3 +261,16 @@ text = "{ void gt_ai_update_begin(void); gt_ai_update_begin(); }"
 func = "func_80032874"
 before_vram = 0x80032880
 text = "{ uint32_t gt_ai_update_mode(uint32_t); ctx->r5 = (gpr)(int32_t)gt_ai_update_mode((uint32_t)ctx->r5); }"
+
+# Track position (func_8003EE1C): each tracked point keeps the track section it's on, and when it leaves it the game tries
+# up to 69 sections either side (D_800949B0's order: 0 to 19 ahead first, then back) and takes the first whose outline
+# holds the point (func_8003E610: 1 means not in it).
+[[patches.hook]]
+func = "func_8003EE1C"
+before_vram = 0x8003EF6C
+text = "{ void gt_section_try(uint8_t*, recomp_context*); gt_section_try(rdram, ctx); }"
+
+[[patches.hook]]
+func = "func_8003EE1C"
+before_vram = 0x8003EF74
+text = "{ void gt_section_result(uint8_t*, recomp_context*); gt_section_result(rdram, ctx); }"
