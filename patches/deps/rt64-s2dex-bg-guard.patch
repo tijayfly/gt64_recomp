@@ -1,0 +1,61 @@
+diff --git a/src/gbi/rt64_gbi_s2dex.cpp b/src/gbi/rt64_gbi_s2dex.cpp
+index 61aa587..58beac9 100644
+--- a/src/gbi/rt64_gbi_s2dex.cpp
++++ b/src/gbi/rt64_gbi_s2dex.cpp
+@@ -128,6 +128,19 @@ namespace RT64 {
+             }
+         }
+ 
++        // A background object read from a stale display list (GT64 submits one leaving a race after it has reused that
++        // memory) can have zero or out-of-range sizes that divide by zero or never finish below: such objects are skipped.
++        static bool bgObjectValid(uint16_t imageW, uint16_t imageH, uint16_t frameW, uint16_t frameH, uint8_t imageSiz) {
++            const bool valid = (imageW >= 4) && (imageW < 0x1000) && (imageH >= 4) && (imageH < 0x1000) && (frameW >= 4) && (frameH >= 4) && (imageSiz <= G_IM_SIZ_32b);
++            if (!valid) {
++                static int logged = 0;
++                if (logged++ < 10) {
++                    fprintf(stderr, "[rt64] background object skipped: image %ux%u frame %ux%u size %u\n", imageW, imageH, frameW, frameH, imageSiz);
++                }
++            }
++            return valid;
++        }
++
+         void bg1Cyc(State *state, DisplayList **dl) {
+ #       ifdef LOG_BGRECT_METHODS
+             RT64_LOG_PRINTF("bg1Cyc::start(0x%08X)", (*dl)->w1);
+@@ -140,6 +153,9 @@ namespace RT64 {
+             const uObjBg *bgObject = reinterpret_cast<const uObjBg *>(state->fromRDRAM(rdramAddress));
+             const uObjBg_t &bg = bgObject->bg;
+             const uObjScaleBg_t &scaleBg = bgObject->scaleBg;
++            if (!bgObjectValid(scaleBg.imageW, scaleBg.imageH, scaleBg.frameW, scaleBg.frameH, scaleBg.imageSiz)) {
++                return;
++            }
+ 
+             // 4/8-bit backgrounds (GT64's scrolling sky panoramas: CI8, wider than the frame, drawn at 1x or 0.5x in
+             // split screen): load whole image rows as 16-bit texels in TMEM-sized bands and draw each band with the
+@@ -414,9 +430,15 @@ namespace RT64 {
+ 
+             // Get the amount of lines that can be loaded into TMEM at once.
+             uint16_t tmemSliceWmax = (imageSliceWmax + tmemMask) / tmemShift + 1;
++            if (tmemSliceWmax == 0) {
++                return;
++            }
+             int16_t tmemSliceLines = tmemSize / tmemSliceWmax;
+             int16_t imageSliceLines = tmemSliceLines - usesBilerp;
+             int32_t frameSliceLines = (imageSliceLines << 20) / scaleH;
++            if (frameSliceLines <= 0) {
++                return;
++            }
+ 
+             // Figure out which line to start with from the image coordinates.
+             int32_t imageLYoffset = (int32_t(imageY0) - imageYorig) << 5;
+@@ -557,6 +579,10 @@ namespace RT64 {
+             // TODO load this into the S2D struct buffer for a more accurate implementation in case there's ever command state bleed.
+             const uObjBg *bgObject = reinterpret_cast<const uObjBg *>(state->fromRDRAM(rdramAddress));
+             const uObjBg_t &bg = bgObject->bg;
++            if (!bgObjectValid(bg.imageW, bg.imageH, bg.frameW, bg.frameH, bg.imageSiz) ||
++                ((bg.imageSiz >= G_IM_SIZ_16b) && ((bg.tmemH / ((bg.imageFmt == G_IM_FMT_CI) ? 2 : 1)) < 4))) {
++                return;
++            }
+             assert(bg.imageLoad == S2DEX_G_BGLT_LOADTILE); // TODO: Only the load tile version is implemented.
+             // Panoramas wider than their frame are GT64's skies, part of the 3D view: keep them out of the card remap.
+             struct RemapGuard { RDP *rdp; bool saved; uint8_t savedBilerp; bool sky; ~RemapGuard() { rdp->noCardRemap = saved; if (sky) rdp->forceTrueBilerp(savedBilerp); } } remapGuard{ rdp, rdp->noCardRemap, uint8_t(rdp->extended.drawExtendedFlags.forceTrueBilerp), false };

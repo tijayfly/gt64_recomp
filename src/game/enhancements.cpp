@@ -5,9 +5,12 @@
 #include "librecomp/game.hpp"
 #include <cstdio>
 #include <map>
+#include <string>
 #include <vector>
 #include <mutex>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 
 #include "gt_config.h"
 
@@ -37,9 +40,13 @@ namespace {
     constexpr uint32_t ovl_front_ram = 0x801A2520;
     constexpr uint32_t ovl_front_text_size = 0xE57A0 - 0xC7920;
     bool ovl_front_loaded = false;
+    uint32_t front_overlay_loads = 0;   // times the front-end overlay has been read in (leaving a race, among others)
 }
 
 extern "C" void gt_on_rom_read(uint32_t rom, uint32_t ram, uint32_t size) {
+    if (rom == ovl_front_rom && ram == ovl_front_ram) {
+        front_overlay_loads++;
+    }
     bool overlaps = ram < ovl_front_ram + ovl_front_text_size && ram + size > ovl_front_ram;
     if (rom == ovl_front_rom && ram == ovl_front_ram) {
         if (!ovl_front_loaded) {
@@ -63,6 +70,14 @@ extern "C" void gt_on_rom_read(uint32_t rom, uint32_t ram, uint32_t size) {
 extern "C" void gt_debug_task(uint8_t* rdram, uint32_t task, int site) {
     static const bool on = std::getenv("GT_TASKLOG") != nullptr;
     if (!on) return;
+    if (std::getenv("GT_TASKLOG")[0] == '3') {
+        static std::map<std::string, int> seen;
+        auto w = [&](uint32_t off) { return *reinterpret_cast<uint32_t*>(rdram + (task + off - 0x80000000u)); };
+        char key[160];
+        std::snprintf(key, sizeof(key), "site%d type %u boot %08X/%X ucode %08X/%X data %08X/%X dl %05X..", site, w(0), w(8), w(0xC), w(0x10), w(0x14), w(0x18), w(0x1C), (w(0x30) & 0xFFFFFF) >> 12);
+        if (seen[key]++ == 0) std::fprintf(stderr, "[taskseen] %s\n", key);
+        return;
+    }
     static int counts[3][8] = {};
     static auto last = std::chrono::steady_clock::now();
     uint32_t type = *reinterpret_cast<uint32_t*>(rdram + (task - 0x80000000u));
@@ -1066,6 +1081,7 @@ extern "C" void gt_part_end(uint8_t* rdram) {
 // written yet): in the Expansion Pak.
 namespace {
     uint32_t ext_gfx_built[2] = {};                     // the frame (game_frame) each buffer was last built on
+    uint32_t ext_gfx_loads[2] = {};                     // front_overlay_loads when each buffer was last built
     std::unordered_map<uint32_t, uint32_t> ext_task_build; // by a task's display list address: the build it was submitted from
 }
 
@@ -1086,6 +1102,7 @@ extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
     frame_sections_dropped = 0;
     game_frame++;
     ext_gfx_built[index & 1] = game_frame;
+    ext_gfx_loads[index & 1] = front_overlay_loads;
     views_last_frame = views_this_frame;
     views_this_frame = 0;
     if (extended_draw_distance()) {
@@ -1102,11 +1119,15 @@ extern "C" void gt_gfx_task_check(uint8_t* rdram, uint32_t task) {
     if (rd32(rdram, task) != 1) return;  // M_GFXTASK
     const uint32_t dl = rd32(rdram, task + 0x30) | 0x80000000u;
     if (dl < ext_gfx || dl >= ext_gfx + 2 * ext_gfx_size) return;
-    const uint32_t build = ext_gfx_built[(dl - ext_gfx) / ext_gfx_size];
+    const uint32_t buffer = (dl - ext_gfx) / ext_gfx_size;
+    const uint32_t build = ext_gfx_built[buffer];
     auto it = ext_task_build.find(dl);
-    if (it != ext_task_build.end() && it->second == build) {
+    // Also any task from a buffer built before the front-end overlay was last read in: leaving a race, the game submits
+    // the frame it was building (its HUD list still the last frame's, calling into race data the next screen's has
+    // since replaced) after loading it.
+    if ((it != ext_task_build.end() && it->second == build) || (ext_gfx_loads[buffer] != front_overlay_loads)) {
         static const bool log = std::getenv("GT_TASKLOG") != nullptr;
-        if (log) std::fprintf(stderr, "[gfxtask] task 0x%08X submitted again from build f%u: emptied\n", dl, build);
+        if (log) std::fprintf(stderr, "[gfxtask] task 0x%08X stale (built on f%u): emptied\n", dl, build);
         wr32(rdram, dl, 0xB8000000u);
         wr32(rdram, dl + 4, 0);
         return;
