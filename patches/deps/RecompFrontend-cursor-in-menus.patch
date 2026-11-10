@@ -1,0 +1,40 @@
+diff --git a/recompinput/src/input_events.cpp b/recompinput/src/input_events.cpp
+index c76a1dc..12162a8 100644
+--- a/recompinput/src/input_events.cpp
++++ b/recompinput/src/input_events.cpp
+@@ -252,22 +252,24 @@ void handle_events() {
+     static bool exited = false;
+     while (SDL_PollEvent(&cur_event) && !exited) {
+         exited = sdl_event_filter(nullptr, &cur_event);
++    }
+ 
+-        bool has_mouse_sensitivity = recompui::config::general::has_mouse_sensitivity_option();
+-
+-        // Lock the cursor if all three conditions are true: mouse aiming is enabled, game input is not disabled, and the game has been started. 
+-        bool cursor_locked = (has_mouse_sensitivity && recompui::config::general::get_mouse_sensitivity() != 0) && !recompinput::game_input_disabled() && ultramodern::is_game_started();
++    // Updated every call rather than per event, so a menu opened by a key press shows the cursor straight away.
++    bool has_mouse_sensitivity = recompui::config::general::has_mouse_sensitivity_option();
+ 
+-        // Hide the cursor based on its enable state, but override visibility to false if the cursor is locked.
+-        bool cursor_visible = recompui::get_cursor_visible();
+-        if (cursor_locked) {
+-            cursor_visible = false;
+-        }
++    // Lock the cursor if all three conditions are true: mouse aiming is enabled, game input is not disabled, and the game has been started. 
++    bool cursor_locked = (has_mouse_sensitivity && recompui::config::general::get_mouse_sensitivity() != 0) && !recompinput::game_input_disabled() && ultramodern::is_game_started();
+ 
+-        SDL_ShowCursor(cursor_visible ? SDL_ENABLE : SDL_DISABLE);
+-        SDL_SetRelativeMouseMode(cursor_locked ? SDL_TRUE : SDL_FALSE);
++    // Hide the cursor based on its enable state, but override visibility to false if the cursor is locked. While a menu
++    // is open (the Esc menu included) it's always shown.
++    bool cursor_visible = recompui::get_cursor_visible() || recompinput::game_input_disabled();
++    if (cursor_locked) {
++        cursor_visible = false;
+     }
+ 
++    SDL_ShowCursor(cursor_visible ? SDL_ENABLE : SDL_DISABLE);
++    SDL_SetRelativeMouseMode(cursor_locked ? SDL_TRUE : SDL_FALSE);
++
+     binding::stop_skipping_events();
+ 
+     if (!started && ultramodern::is_game_started()) {
