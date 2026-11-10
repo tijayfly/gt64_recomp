@@ -684,10 +684,13 @@ extern "C" void gt_pedal_begin(uint32_t car) {
     pedal_car = car;
 }
 
+void gt_traction_control(uint8_t* rdram, uint32_t car, bool brake);
+
 extern "C" void gt_pedal_end(uint8_t* rdram, int brake) {
     for (const PedalCap& cap : pedal_caps) {
         if (cap.car != 0 && cap.car == pedal_car) {
             cap_pedal(rdram, pedal_car + (brake ? 0x188 : 0x180), brake ? cap.brake : cap.throttle);
+            gt_traction_control(rdram, pedal_car, brake != 0);
             static const bool log = std::getenv("GT_PEDAL_LOG") != nullptr;
             if (log && !brake) {
                 static int n = 0;
@@ -1695,3 +1698,54 @@ extern "C" void gt_ai_after_move(uint8_t* rdram) {
     }
 }
 
+
+// Traction Control (General > Traction Control). Each physics step, after the game updates a controller car's pedals
+// (gt_pedal_end):
+// - the throttle is held down to what keeps the car from slipping: less the more its driven wheels spin past the revs
+//   its road speed gives (car +0x168 against +0x100), and less the more it slides (the angle between its heading,
+//   +0x3B8, and where it's going, +0x3C0); the game's own ramp brings it back up as grip returns;
+// - while it slides more than 8 degrees above 30 km/h, the brake is applied, up to 60% at 20 degrees, which in testing
+//   stopped slides the throttle alone didn't (with the throttle alone, slides past 10 degrees went from 42 to 15 samples
+//   in a test lap of full-lock driving; with the brake, to none).
+// The game doesn't model wheels locking under braking (the two revs stay equal), so the brake is never eased.
+void gt_traction_control(uint8_t* rdram, uint32_t car, bool brake) {
+    if (gt::get_traction_control() != gt::TractionControl::On) {
+        return;
+    }
+    const int gear = read_half(rdram, car + 0x178);
+    const double speed = std::fabs(read_double(rdram, car + 0x110));   // km/h
+    double angle = std::fabs(std::remainder(read_double(rdram, car + 0x3C0) - read_double(rdram, car + 0x3B8), 360.0));
+    if (gear == 0 && angle > 90.0) {
+        angle = 180.0 - angle;  // backing up
+    }
+    if (brake) {
+        if (angle < 90.0 && speed > 30.0 && angle > 8.0) {
+            const double want = std::min(0.6, (angle - 8.0) / 20.0);
+            if (read_double(rdram, car + 0x188) < want) {
+                wr64f(rdram, car + 0x188, want);
+            }
+        }
+        return;
+    }
+    if (gear == 1) {
+        return;  // neutral
+    }
+    const double road_rpm = read_double(rdram, car + 0x100);
+    const double wheel_rpm = read_double(rdram, car + 0x168);
+    const double spin = (wheel_rpm - road_rpm) / std::max(road_rpm, 3000.0);
+    float cap = clamp01(float(1.0 - (spin - 0.02) / 0.06));
+    if (speed > 15.0) {
+        cap = std::min(cap, clamp01(float(1.0 - (angle - 5.0) / 12.0)));
+    }
+    if (read_double(rdram, car + 0x180) > double(cap)) {
+        wr64f(rdram, car + 0x180, double(cap));
+    }
+    static const bool log = std::getenv("GT_TC_LOG") != nullptr;
+    if (log) {
+        static uint32_t n = 0;
+        if ((n++ % 4) == 0) {
+            std::fprintf(stderr, "[tc] f%u gear %d speed %.1f spin %.3f angle %.1f thr %.2f brk %.2f cap %.2f\n", game_frame, gear, speed, spin,
+                angle, read_double(rdram, car + 0x180), read_double(rdram, car + 0x188), cap);
+        }
+    }
+}

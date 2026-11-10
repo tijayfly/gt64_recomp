@@ -101,10 +101,27 @@ static void add_general_options(recomp::config::Config &config) {
         reduce_ai_aggression_options,
         gt::ReduceAiAggression::On
     );
+
+    static EnumOptionVector traction_control_options = {
+        {gt::TractionControl::Off, "Off", "Off"},
+        {gt::TractionControl::On, "On", "On"},
+    };
+    config.add_enum_option(
+        gt::configkeys::general::traction_control,
+        "Traction Control",
+        "<recomp-color primary>On</recomp-color>: Holds the throttle back to stop your wheels spinning and the car sliding. "
+        "<recomp-color primary>Off</recomp-color>: Keeps the game's original handling.",
+        traction_control_options,
+        gt::TractionControl::Off
+    );
 }
 
 gt::SlipRumble gt::get_slip_rumble() {
     return static_cast<gt::SlipRumble>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::slip_rumble)));
+}
+
+gt::TractionControl gt::get_traction_control() {
+    return static_cast<gt::TractionControl>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::traction_control)));
 }
 
 gt::ReduceAiAggression gt::get_reduce_ai_aggression() {
