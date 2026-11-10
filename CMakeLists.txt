@@ -162,6 +162,8 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # Frame interpolation: parts drawn several times (wheels) aren't paired with one far from where it was expected, so a
 # car's wheels appearing as another's disappear (GT64 draws wheels only near the camera) don't fly across between them.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-interp-repeated-kinds.patch)
+# S2DEX backgrounds with zero or out-of-range sizes (from a stale display list) are skipped instead of dividing by zero.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-s2dex-bg-guard.patch)
 
 apply_dependency_patches()
 
