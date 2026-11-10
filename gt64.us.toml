@@ -136,6 +136,12 @@ before_vram = 0x80039AA4
 text = "{ void gt_slip_rumble(uint8_t*, uint32_t); gt_slip_rumble(rdram, (uint32_t)ctx->r4); }"
 
 # Draw distance: draw the whole track ring, with the node pool and matrices allowed into the Expansion Pak's 4 MB.
+# The section the view draws from, checked against the camera's position (gt_view_start).
+[[patches.hook]]
+func = "func_8000A350"
+before_vram = 0x8000A418
+text = "{ void gt_view_start(uint8_t*, uint32_t); gt_view_start(rdram, (uint32_t)ctx->r2); }"
+
 [[patches.hook]]
 func = "func_8000A350"
 before_vram = 0x8000A47C

@@ -828,6 +828,47 @@ namespace {
     }
 }
 
+// The section a race view draws the track from (its +0xF8, copied from the camera's each frame) is the ring section
+// nearest the camera, found by a search around the last one. Off the track it has been seen to end up on a section far
+// from the camera, and the whole track was then drawn away from it (nothing in sight but the cars and sky). When the
+// view's section is well over twice as far from the camera as the nearest one, the view starts from the nearest instead
+// (logged). Only this frame's drawing changes: the game's own state is untouched.
+extern "C" void gt_view_start(uint8_t* rdram, uint32_t view) {
+    const uint32_t base = rd32(rdram, 0x80114584u);
+    const int32_t ring = section_ring(rdram);
+    if (base < 0x80000000u || base >= 0x80800000u || ring < 2 || ring > 0x1000) {
+        return;
+    }
+    const int32_t start = int16_t(rd16(rdram, view + 0xF8));
+    const double cx = rd64f(rdram, view + 0xD8), cy = rd64f(rdram, view + 0xE0), cz = rd64f(rdram, view + 0xE8);
+    auto dist2 = [&](int32_t i) {
+        const uint32_t a = base + uint32_t(i) * 0x28;
+        const double dx = rd64f(rdram, a + 0x08) - cx, dy = rd64f(rdram, a + 0x10) - cy, dz = rd64f(rdram, a + 0x18) - cz;
+        return dx * dx + dy * dy + dz * dz;
+    };
+    int32_t nearest = 0;
+    double nearest_d2 = dist2(0);
+    for (int32_t i = 1; i < ring; i++) {
+        const double d2 = dist2(i);
+        if (d2 < nearest_d2) {
+            nearest_d2 = d2;
+            nearest = i;
+        }
+    }
+    const double start_d = (start >= 0 && start < ring) ? std::sqrt(dist2(start)) : 1e30;
+    const double nearest_d = std::sqrt(nearest_d2);
+    const double spacing = section_spacing(rdram);
+    const double slack = std::max(3000.0, 3.0 * spacing);
+    if (start_d > 2.0 * nearest_d + slack) {
+        static uint32_t logged = 0;
+        if (logged++ < 20) {
+            std::fprintf(stderr, "[track] f%u view section %d is %.0f from the camera, nearest %d at %.0f: drawn from %d\n", game_frame,
+                start, start_d, nearest, nearest_d, nearest);
+        }
+        wr16(rdram, view + 0xF8, uint16_t(nearest));
+    }
+}
+
 extern "C" int32_t gt_sections_behind(uint8_t* rdram, int32_t count) {
     original_behind = count;
     frame_start_section = int16_t(rd16(rdram, rd32(rdram, 0x8010FFCCu) + 0xF8));
