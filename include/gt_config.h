@@ -17,6 +17,7 @@ namespace gt {
             inline const std::string auto_gearbox = "auto_gearbox";
             inline const std::string slip_rumble = "slip_rumble";
             inline const std::string reduce_ai_aggression = "reduce_ai_aggression";
+            inline const std::string traction_control = "traction_control";
         }
     }
 
@@ -51,6 +52,11 @@ namespace gt {
         On, // opponents slow down rather than drive into a player's car ahead of them on their line
     };
 
+    enum class TractionControl {
+        Off,
+        On, // the throttle is held back while the car's wheels spin or it slides
+    };
+
     enum class HdWheels {
         Off, // the game's six-sided wheels
         On,  // modelled wheels (round tyres, five-spoke rims) in their place
@@ -72,6 +78,7 @@ namespace gt {
     AutoGearbox get_auto_gearbox();
     SlipRumble get_slip_rumble();
     ReduceAiAggression get_reduce_ai_aggression();
+    TractionControl get_traction_control();
     DrawDistance get_draw_distance();
     HdWheels get_hd_wheels();
     DepthOfField get_depth_of_field();
