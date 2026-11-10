@@ -118,6 +118,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime ${CMAKE_SOURCE_D
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/RecompFrontend ${CMAKE_SOURCE_DIR}/patches/deps/RecompFrontend-mouse-buttons.patch)
 # "Open Mods Folder" runs ShellExecute on a thread of its own with COM set up, not in the menu's callback.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/RecompFrontend ${CMAKE_SOURCE_DIR}/patches/deps/RecompFrontend-open-mods-folder-thread.patch)
+# The cursor is always shown while a menu is open (it followed whether the mouse or a key/controller was used last, so
+# opening the Esc menu with the key hid it), and updated every frame rather than only when an event arrives.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/RecompFrontend ${CMAKE_SOURCE_DIR}/patches/deps/RecompFrontend-cursor-in-menus.patch)
 # Cross-compiling for Windows from Linux (cmake/windows-cross-clang-cl.cmake, docs/WINDOWS_CROSS.md): a host-built
 # file_to_c, the Linux DXC for SPIR-V and the Windows dxc.exe under Wine for DXIL.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-cross-compile-windows.patch)
