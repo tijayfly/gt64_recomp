@@ -140,6 +140,16 @@ void gt::widescreen_on_vi() {
         return;
     }
     vi_count++;
+    // The big title font's full stop (its glyph entry at D_8008DD90: width, atlas width, left column, flags, atlas, height)
+    // starts a column early, on the 9's outline before it, and leaves its own outline's last column out: "U.S.A." titles
+    // showed a grey bar before each stop. One column on.
+    {
+        uint16_t* left = reinterpret_cast<uint16_t*>(rdram + ((0x8008DD94u ^ 2) - 0x80000000u));
+        const uint16_t width = *reinterpret_cast<uint16_t*>(rdram + ((0x8008DD90u ^ 2) - 0x80000000u));
+        if (*left == 0x75 && width == 5) {
+            *left = 0x76;
+        }
+    }
     const uint32_t mode = *reinterpret_cast<uint32_t*>(rdram + (mode_func_ptr - 0x80000000u));
     static uint32_t last_mode = 0;
     if (mode != last_mode) {
