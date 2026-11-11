@@ -748,6 +748,7 @@ namespace {
     void wr32(uint8_t* rdram, uint32_t a, uint32_t v) { *reinterpret_cast<uint32_t*>(rdram + (a - 0x80000000u)) = v; }
     void wr16(uint8_t* rdram, uint32_t a, uint16_t v) { *reinterpret_cast<uint16_t*>(rdram + ((a ^ 2) - 0x80000000u)) = v; }
     uint16_t rd16(uint8_t* rdram, uint32_t a) { return *reinterpret_cast<uint16_t*>(rdram + ((a ^ 2) - 0x80000000u)); }
+    uint8_t rd8(uint8_t* rdram, uint32_t a) { return rdram[(a ^ 3) - 0x80000000u]; }
     double rd64f(uint8_t* rdram, uint32_t a) {
         const uint64_t bits = (uint64_t(rd32(rdram, a)) << 32) | rd32(rdram, a + 4);
         double d;
@@ -2200,4 +2201,31 @@ extern "C" void gt_wall_after(uint8_t* rdram, recomp_context* ctx, uint32_t car)
             moved_x, moved_z, passes, worst_left, rd64f(rdram, car + 0x110), rd64f(rdram, car + 0x3B8), rd64f(rdram, car + 0x3C0));
     }
     wall_net(rdram, ctx, car, obj, group_at);
+}
+
+// Race messages hidden while paused. The race's messages (ROLLING START!!, READY!, GO!!, LAP and the lap time, FINAL LAP, WRONG WAY!...)
+// are lines of text the race's objects add to the frame's text list each frame (func_8000CD84: entries of 0x14 at
+// D_8013F628 + buffer * 0x1400, string, x, y, font, colour; the count at D_8013F624 + buffer * 2). Paused (D_800DB24D & 0xC)
+// the objects stop and the list isn't cleared (func_8000C8A0 isn't called), so whatever was on screen stayed there under
+// the pause menu, which is drawn separately. Paused, the drawing (func_8000CA9C) leaves out the lines away from the top
+// left: the timer and lap times stay. The list is rebuilt when the game carries on.
+extern "C" void gt_pause_texts(uint8_t* rdram) {
+    if ((rd8(rdram, 0x800DB24Du) & 0xC) != 0xC) return;
+    const uint32_t buffer = rd8(rdram, 0x8011A595u) & 1;
+    const uint32_t count_at = 0x8013F624u + buffer * 2;
+    const uint32_t list = 0x8013F628u + buffer * 0x1400u;
+    const uint32_t count = std::min<uint32_t>(rd16(rdram, count_at), 0x1400u / 0x14u);
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint32_t entry = list + i * 0x14;
+        const int32_t x = int32_t(rd32(rdram, entry + 4)), y = int32_t(rd32(rdram, entry + 8));
+        const uint32_t font = rd16(rdram, entry + 0xC);
+        // A race message: not the pause menu's own lines (font 9, func_80024BD4), nor the HUD's (at x 24, and from y 24).
+        if (font != 9 && x > 40 && y >= 64) continue;
+        if (kept != i) {
+            for (uint32_t w = 0; w < 0x14; w += 4) wr32(rdram, list + kept * 0x14 + w, rd32(rdram, entry + w));
+        }
+        kept++;
+    }
+    if (kept != count) wr16(rdram, count_at, uint16_t(kept));
 }
