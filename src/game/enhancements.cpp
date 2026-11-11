@@ -1815,9 +1815,37 @@ namespace {
         wall_rand_state = wall_rand_state * 1664525u + 1013904223u;
         return double(wall_rand_state >> 8) / double(1u << 24);
     }
+    // Whether a position is on any of the track's polygons (track: the car's tracker's, at its draw group's +0x64).
+    void track_polygon(uint8_t* rdram, uint32_t track, uint32_t i, double* vx, double* vz, uint32_t& nv) {
+        const uint32_t verts = rd32(rdram, track + 4), poly = rd32(rdram, track + 8) + i * 32;
+        nv = rd32(rdram, poly) & 0xF;
+        for (uint32_t k = 0; k < nv; k++) {
+            const uint32_t v = rd16(rdram, poly + 4 + k * 2);
+            vx[k] = rd64f(rdram, 0x80094990u + (v >> 14) * 8) + rd32f(rdram, verts + (v & 0xFFF) * 8);
+            vz[k] = rd64f(rdram, 0x80094990u + ((v >> 12) & 3) * 8) + rd32f(rdram, verts + (v & 0xFFF) * 8 + 4);
+        }
+    }
+    bool on_track(uint8_t* rdram, uint32_t track, double x, double z) {
+        const uint32_t count = rd16(rdram, track);
+        for (uint32_t i = 0; i < count; i++) {
+            double vx[16], vz[16];
+            uint32_t nv;
+            track_polygon(rdram, track, i, vx, vz, nv);
+            if (nv < 3) continue;
+            bool in = true;
+            for (uint32_t k = 0; k < nv && in; k++) {
+                const uint32_t m = (k + 1) % nv;
+                in = (z - vz[k]) * (vx[m] - vx[k]) - (vz[m] - vz[k]) * (x - vx[k]) >= 0.0;
+            }
+            if (in) return true;
+        }
+        return false;
+    }
+    std::string wall_history[6];
+    uint32_t wall_history_at = 0;
     uint32_t wall_steps = 0;
     int wall_test_left = 0;
-    double wall_test_travel = 0.0, wall_test_heading = 0.0, wall_test_speed = 0.0;
+    double wall_test_travel = 0.0, wall_test_heading = 0.0, wall_test_speed = 0.0, wall_test_spin = 0.0;
 }
 
 // Debug (GT_WALLTEST=<steps>): every <steps> physics steps, a player's car is shoved for 40 steps: at a random speed in
@@ -1829,6 +1857,44 @@ extern "C" void gt_wall_test(uint8_t* rdram, uint32_t car) {
     const double x = rd64f(rdram, obj + 0x40), z = rd64f(rdram, obj + 0x50);
     static double last_x = 0.0, last_z = 0.0;
     if (wall_steps == 0 && std::getenv("GT_WALLSEED")) wall_rand_state = uint32_t(std::atoi(std::getenv("GT_WALLSEED")));
+    static const bool teleport = std::getenv("GT_WALLTEST_TELEPORT") != nullptr;
+    const uint32_t group = rd32(rdram, car + 0x3E8);
+    if ((wall_steps + 1) % uint32_t(every) == 0 && teleport && group >= 0x80000000u && group < 0x80800000u) {
+        const uint32_t track = rd32(rdram, group + 0x64);
+        static uint32_t trials = 0, escapes = 0;
+        if (trials != 0 && !on_track(rdram, track, x, z)) {
+            escapes++;
+            std::fprintf(stderr, "[walltest] ESCAPE %u of %u trials: at %.0f %.0f\n", escapes, trials, x, z);
+            for (uint32_t i = 0; i < 6; i++) std::fprintf(stderr, "      %s\n", wall_history[(wall_history_at + i) % 6].c_str());
+        }
+        trials++;
+        // Onto a random polygon with a wall, at its centre.
+        const uint32_t count = rd16(rdram, track);
+        uint32_t poly = 0, nv = 0;
+        double vx[16], vz[16];
+        for (int tries = 0; tries < 200; tries++) {
+            poly = uint32_t(wall_rand() * count) % count;
+            if ((rd16(rdram, rd32(rdram, track + 8) + poly * 32 + 2) & 0xF0) != 0) break;
+        }
+        track_polygon(rdram, track, poly, vx, vz, nv);
+        double px = 0.0, pz = 0.0;
+        for (uint32_t k = 0; k < nv; k++) { px += vx[k] / nv; pz += vz[k] / nv; }
+        for (const uint32_t at : { obj + 0x40, obj + 0x120, car + 0x8 + 0x78, car + 0xB0 + 0x78 }) {
+            wr64f(rdram, at, px);
+            wr64f(rdram, at + 0x10, pz);
+        }
+        uint32_t entries[5] = { rd32(rdram, group + 0x60 + 8), 0, 0, 0, 0 };
+        for (uint32_t i = 0; i < 4; i++) entries[i + 1] = rd32(rdram, rd32(rdram, car + 0x3D8 + i * 4) + 0x68 + 8);
+        for (const uint32_t entry : entries) {
+            if (entry < 0x80000000u || entry >= 0x80800000u) continue;
+            wr32(rdram, entry, (rd32(rdram, entry) & ~(0x7FFu << 14)) | (poly << 14));
+            wr64f(rdram, entry + 0x20, px);
+            wr64f(rdram, entry + 0x28, pz);
+            wr64f(rdram, entry + 0x30, px);
+            wr64f(rdram, entry + 0x40, pz);
+        }
+        std::fprintf(stderr, "[walltest] trial %u: polygon %u at %.0f %.0f\n", trials, poly, px, pz);
+    }
     if (++wall_steps % uint32_t(every) == 0) {
         wall_test_left = 40;
         wall_test_travel = wall_rand() * 360.0;
@@ -1836,8 +1902,10 @@ extern "C" void gt_wall_test(uint8_t* rdram, uint32_t car) {
         const double turn = (kind == 0) ? 90.0 : (kind == 1) ? -90.0 : (kind == 2) ? 0.0 : (kind == 3) ? 180.0 : wall_rand() * 360.0;
         wall_test_heading = std::fmod(wall_test_travel + turn + 720.0, 360.0);
         wall_test_speed = 15.0 + wall_rand() * 65.0;   // units a step (about m/s)
-        std::fprintf(stderr, "[walltest] f%u step %u: shove travel %.1f heading %.1f speed %.0f\n", game_frame, wall_steps, wall_test_travel,
-            wall_test_heading, wall_test_speed);
+        static const double spin = std::getenv("GT_WALLTEST_SPIN") ? std::atof(std::getenv("GT_WALLTEST_SPIN")) : 0.0;
+        wall_test_spin = (wall_rand() * 2.0 - 1.0) * spin;
+        std::fprintf(stderr, "[walltest] f%u step %u: shove travel %.1f heading %.1f speed %.0f spin %.1f\n", game_frame, wall_steps, wall_test_travel,
+            wall_test_heading, wall_test_speed, wall_test_spin);
     }
     if (wall_test_left > 0) {
         if (wall_test_left < 38 && wall_test_left > 34) std::fprintf(stderr, "[walltest]   moved %.1f a step at %.0f (%.0f)\n", std::hypot(x - last_x, z - last_z), rd64f(rdram, car + 0x110), rd64f(rdram, car + 0x1E8));
@@ -1849,9 +1917,12 @@ extern "C" void gt_wall_test(uint8_t* rdram, uint32_t car) {
 
 // Debug: before the car's move (func_8002E574).
 extern "C" void gt_wall_test_move(uint8_t* rdram, uint32_t car) {
-    if (wall_test_left <= 0 || car < 0x80000000u || car >= 0x80800000u || !controller_car(car)) return;
+    static const int hold = std::getenv("GT_WALLTEST_HOLD") ? std::atoi(std::getenv("GT_WALLTEST_HOLD")) : 40;
+    if (wall_test_left <= 40 - hold || car < 0x80000000u || car >= 0x80800000u || !controller_car(car)) return;
     wr64f(rdram, car + 0x3C0, wall_test_travel);
-    wr64f(rdram, car + 0x3B8, wall_test_heading);
+    static const bool turn_once = std::getenv("GT_WALLTEST_TURNONCE") != nullptr;
+    if (!turn_once || wall_test_left == 39) wr64f(rdram, car + 0x3B8, wall_test_heading);
+    else if (wall_test_spin != 0.0) wr64f(rdram, car + 0x3B8, std::fmod(rd64f(rdram, car + 0x3B8) + wall_test_spin + 720.0, 360.0));
     wr64f(rdram, car + 0x1E8, wall_test_speed);
 }
 
@@ -1860,12 +1931,13 @@ extern "C" void gt_wall_test_move(uint8_t* rdram, uint32_t car) {
 // again (func_80038508), up to wall_passes times (for a corner between two walls). The game's own response only turns
 // the car or pushes it along its length by a few fixed steps, and does nothing for some sets of corners (opposite
 // ones, all four), so a car sliding sideways into a barrier went through it: once all four corners were past the
-// wall it drove on outside the track. Only for a player's car (General > Barrier Containment... always on).
+// wall it drove on outside the track. Only for a player's car.
 extern "C" void func_80038508(uint8_t* rdram, recomp_context* ctx);
 
 namespace {
     constexpr int wall_passes = 6;
     constexpr int wall_normal_passes = 3;    // out along the wall's normal first, then straight back
+    constexpr double wall_depth_threshold = 40.0;  // units through a wall (a car is ~100 wide) before the car's moved back
     constexpr double wall_margin = 0.5;      // units inside the wall the corner is left
     constexpr double wall_shift_limit = 600.0;  // a corner further through than this isn't a move into a wall (the car was placed)
 
@@ -1893,29 +1965,42 @@ extern "C" void gt_wall_after(uint8_t* rdram, recomp_context* ctx, uint32_t car)
         if (corners[i] < 0x80000000u || corners[i] >= 0x80800000u) return;
         any = any || rd32f(rdram, corners[i] + 0x24) >= 0.0f;
     }
-    if (std::getenv("GT_WALLLOG") && std::atoi(std::getenv("GT_WALLLOG")) >= 2 && (any || wall_test_left > 0)) {
-        static uint32_t n = 0;
-        if (n++ < 6000) for (uint32_t i = 0; i < 4; i++) {
-            const WallPoint p = wall_point(rdram, corners[i] + 0x20);
-            std::fprintf(stderr, "    before: step %u corner %u word %08X t %.2f %.2f c %.2f %.2f wall %.1f\n", wall_steps, i, rd32(rdram, corners[i] + 0x20), p.tx, p.tz, p.cx, p.cz, p.wall);
-        }
-    }
-    static std::string history[6];
-    static uint32_t history_at = 0;
     if (log) {
-        char text[512];
+        char text[800];
         int n = std::snprintf(text, sizeof(text), "step %u f%u speed %.0f:", wall_steps, game_frame, rd64f(rdram, car + 0x1E8));
-        bool lost = false;
         for (uint32_t i = 0; i < 4; i++) {
             const WallPoint p = wall_point(rdram, corners[i] + 0x20);
             n += std::snprintf(text + n, sizeof(text) - n, " [%u %08X t %.2f %.2f c %.2f %.2f w %.1f]", i, rd32(rdram, corners[i] + 0x20), p.tx, p.tz, p.cx, p.cz, p.wall);
-            lost = lost || (p.wall < 0.0f && std::hypot(p.tx - p.cx, p.tz - p.cz) > 0.01);
         }
-        history[history_at++ % 6] = text;
-        static uint32_t lost_logged = 0;
-        if (lost && lost_logged++ < 200) {
-            std::fprintf(stderr, "[wall] LOST:\n");
-            for (uint32_t i = 0; i < 6; i++) std::fprintf(stderr, "      %s\n", history[(history_at + i) % 6].c_str());
+        {
+            const WallPoint c = wall_point(rdram, group_at + 0x18);
+            n += std::snprintf(text + n, sizeof(text) - n, " centre %08X obj %.1f %.1f c %.1f %.1f w %.1f", rd32(rdram, group_at + 0x18), rd64f(rdram, obj + 0x40),
+                rd64f(rdram, obj + 0x50), c.cx, c.cz, c.wall);
+        }
+        wall_history[wall_history_at++ % 6] = text;
+    }
+    // Debug: the track's polygons to a file (GT_TRACKDUMP), the car's path to the log (GT_WALLTRAIL).
+    if (log) {
+        const uint32_t track = rd32(rdram, group_at + 0x64);
+        static bool dumped = false;
+        if (!dumped && std::getenv("GT_TRACKDUMP")) {
+            dumped = true;
+            if (FILE* f = std::fopen(std::getenv("GT_TRACKDUMP"), "w")) {
+                for (uint32_t i = 0; i < rd16(rdram, track); i++) {
+                    double vx[16], vz[16];
+                    uint32_t nv;
+                    track_polygon(rdram, track, i, vx, vz, nv);
+                    std::fprintf(f, "%u %08X %04X", i, rd32(rdram, rd32(rdram, track + 8) + i * 32), rd16(rdram, rd32(rdram, track + 8) + i * 32 + 2));
+                    for (uint32_t k = 0; k < nv; k++) std::fprintf(f, " %.1f %.1f", vx[k], vz[k]);
+                    std::fprintf(f, "\n");
+                }
+                std::fclose(f);
+            }
+        }
+        static const bool trail = std::getenv("GT_WALLTRAIL") != nullptr;
+        if (trail) {
+            const double x = rd64f(rdram, obj + 0x40), z = rd64f(rdram, obj + 0x50);
+            std::fprintf(stderr, "[trail] %u %.1f %.1f %.1f %d\n", wall_steps, x, z, rd64f(rdram, car + 0x3B8), int(on_track(rdram, track, x, z)));
         }
     }
     if (!any && !off) return;
@@ -1950,44 +2035,20 @@ extern "C" void gt_wall_after(uint8_t* rdram, recomp_context* ctx, uint32_t car)
         }
         worst_left = worst;
         if (worst <= 0.0 || furthest > wall_shift_limit || pass == wall_passes) break;
+        // A corner a little through a wall is the game's ordinary contact, which its own response settles: left to it,
+        // unless it's a set of corners the game does nothing for (opposite ones, all four).
+        if (pass == 0 && furthest < wall_depth_threshold && mask != 5 && mask != 10 && mask != 15) break;
         for (const uint32_t at : { obj + 0x40, obj + 0x120, car + 0x8 + 0x78, car + 0xB0 + 0x78 }) {
             wr64f(rdram, at, rd64f(rdram, at) + sx);
             wr64f(rdram, at + 0x10, rd64f(rdram, at + 0x10) + sz);
         }
         moved_x += sx;
         moved_z += sz;
-        if (std::getenv("GT_WALLLOG") && std::atoi(std::getenv("GT_WALLLOG")) >= 2) std::fprintf(stderr, "    pass %d: mask %X shift %.1f %.1f (depth %.1f)\n", pass, mask, sx, sz, worst);
         passes++;
     }
     static uint32_t logged = 0;
     if (log && (passes != 0 || worst_left > 0.0) && logged++ < 20000) {
         std::fprintf(stderr, "[wall] f%u mask %X moved %.1f %.1f in %d, left %.1f; speed %.0f heading %.0f travel %.0f\n", game_frame, mask,
             moved_x, moved_z, passes, worst_left, rd64f(rdram, car + 0x110), rd64f(rdram, car + 0x3B8), rd64f(rdram, car + 0x3C0));
-    }
-    if (log && std::hypot(moved_x, moved_z) > 90.0) {
-        std::fprintf(stderr, "[wall] BIG move:\n");
-        for (uint32_t i = 0; i < 6; i++) std::fprintf(stderr, "      %s\n", history[(history_at + i) % 6].c_str());
-    }
-    static const bool verbose = std::getenv("GT_WALLLOG") != nullptr && std::atoi(std::getenv("GT_WALLLOG")) >= 2;
-    static uint32_t verbose_logged = 0;
-    if (verbose && (std::hypot(moved_x, moved_z) > 100.0 || worst_left > 0.0) && verbose_logged++ < 300) {
-        const WallPoint c = wall_point(rdram, group_at + 0x18);
-        std::fprintf(stderr, "    obj %.0f %.0f centre poly %u t %.0f %.0f c %.0f %.0f wall %.0f\n", rd64f(rdram, obj + 0x40), rd64f(rdram, obj + 0x50),
-            (rd32(rdram, group_at + 0x18) << 7) >> 21, c.tx, c.tz, c.cx, c.cz, c.wall);
-        std::fprintf(stderr, "    car %08X corner0 %08X D %08X:", car, corners[0], rd32(rdram, 0x801652E8u));
-        for (uint32_t w = 0; w < 0x80; w += 4) std::fprintf(stderr, " %08X", rd32(rdram, corners[0] + w));
-        std::fprintf(stderr, "\n");
-        for (uint32_t i = 0; i < 4; i++) {
-            const WallPoint p = wall_point(rdram, corners[i] + 0x20);
-            std::fprintf(stderr, "    corner %u poly %u word %08X t %.0f %.0f c %.0f %.0f wall %.0f radius %.1f\n", i, (rd32(rdram, corners[i] + 0x20) << 7) >> 21,
-                rd32(rdram, corners[i] + 0x20), p.tx, p.tz, p.cx, p.cz, p.wall, rd32f(rdram, corners[i] + 0x28));
-        }
-    }
-    // Debug: how far outside the track the car's centre is.
-    if (log) {
-        const WallPoint centre = wall_point(rdram, rd32(rdram, car + 0x3E8) + 0x18);
-        const double out = std::hypot(rd64f(rdram, obj + 0x40) - centre.cx, rd64f(rdram, obj + 0x50) - centre.cz);
-        static uint32_t out_logged = 0;
-        if (out > 150.0 && out_logged++ < 2000) std::fprintf(stderr, "[wall] f%u ESCAPE centre %.0f from its tracked point, mask %X\n", game_frame, out, mask);
     }
 }
