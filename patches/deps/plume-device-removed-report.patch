@@ -1,0 +1,128 @@
+diff --git a/plume_d3d12.cpp b/plume_d3d12.cpp
+index 2cdcf18..caaf465 100644
+--- a/plume_d3d12.cpp
++++ b/plume_d3d12.cpp
+@@ -8,6 +8,7 @@
+ #include "plume_d3d12.h"
+ 
+ #include <unordered_set>
++#include <atomic>
+ 
+ #include <dxgi1_5.h>
+ 
+@@ -44,6 +45,7 @@ extern "C" {
+ #endif
+ 
+ namespace plume {
++    static void reportDeviceRemoved(D3D12Device *device, const char *where, HRESULT res);
+     static const uint32_t ShaderDescriptorHeapSize = 65536;
+     static const uint32_t SamplerDescriptorHeapSize = 1024;
+     static const uint32_t TargetDescriptorHeapSize = 16384;
+@@ -2763,6 +2765,7 @@ namespace plume {
+         HRESULT res = device->allocator->CreateResource(&allocationDesc, &resourceDesc, resourceStates, nullptr, &allocation, IID_PPV_ARGS(&d3d));
+         if (FAILED(res)) {
+             fprintf(stderr, "CreateResource failed with error code 0x%lX.\n", res);
++            reportDeviceRemoved(device, "CreateResource", res);
+             return;
+         }
+     }
+@@ -2782,7 +2785,10 @@ namespace plume {
+         }
+ 
+         void *outputData = nullptr;
+-        d3d->Map(subresource, (readRange != nullptr) ? &range : nullptr, &outputData);
++        HRESULT res = d3d->Map(subresource, (readRange != nullptr) ? &range : nullptr, &outputData);
++        if (FAILED(res) || (outputData == nullptr)) {
++            reportDeviceRemoved(device, "Map", res);
++        }
+         return outputData;
+     }
+ 
+@@ -2879,6 +2885,7 @@ namespace plume {
+         HRESULT res = device->allocator->CreateResource(&allocationDesc, &resourceDesc, resourceStates, (desc.optimizedClearValue != nullptr) ? &optimizedClearValue : nullptr, &allocation, IID_PPV_ARGS(&d3d));
+         if (FAILED(res)) {
+             fprintf(stderr, "CreateResource failed with error code 0x%lX.\n", res);
++            reportDeviceRemoved(device, "CreateResource", res);
+             return;
+         }
+     }
+@@ -3638,6 +3645,62 @@ namespace plume {
+         }
+     }
+ 
++    // GT64: when the device is lost (every Map then returns null and the renderer's threads crash on it), why it was,
++    // to the log, once: the removal reason, and from DRED (enabled in D3D12Interface) the last commands the GPU had
++    // been given and the resources around a page fault.
++    static void reportDeviceRemoved(D3D12Device *device, const char *where, HRESULT res) {
++        static std::atomic<bool> reported = false;
++        if ((device == nullptr) || (device->d3d == nullptr) || reported.exchange(true)) {
++            return;
++        }
++
++        const HRESULT reason = device->d3d->GetDeviceRemovedReason();
++        fprintf(stderr, "[d3d12] %s failed with 0x%lX: device removed reason 0x%lX\n", where, res, reason);
++        ID3D12DeviceRemovedExtendedData1 *dred = nullptr;
++        if (SUCCEEDED(device->d3d->QueryInterface(IID_PPV_ARGS(&dred)))) {
++            D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 crumbs = {};
++            if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput1(&crumbs))) {
++                int lists = 0;
++                for (const D3D12_AUTO_BREADCRUMB_NODE1 *node = crumbs.pHeadAutoBreadcrumbNode; (node != nullptr) && (lists < 24); node = node->pNext) {
++                    const uint32_t done = (node->pLastBreadcrumbValue != nullptr) ? *node->pLastBreadcrumbValue : 0;
++                    if ((done == 0) || (done >= node->BreadcrumbCount)) {
++                        continue;
++                    }
++
++                    lists++;
++                    fprintf(stderr, "[d3d12]   list \"%ls\" queue \"%ls\": %u of %u commands done\n", node->pCommandListDebugNameW ? node->pCommandListDebugNameW : L"",
++                        node->pCommandQueueDebugNameW ? node->pCommandQueueDebugNameW : L"", done, node->BreadcrumbCount);
++                    const uint32_t from = (done > 12) ? (done - 12) : 0;
++                    const uint32_t to = (done + 4 < node->BreadcrumbCount) ? (done + 4) : node->BreadcrumbCount;
++                    for (uint32_t i = from; i < to; i++) {
++                        fprintf(stderr, "[d3d12]     %s#%u op %d\n", (i == done) ? "> " : "  ", i, int(node->pCommandHistory[i]));
++                    }
++                }
++
++                if (lists == 0) {
++                    fprintf(stderr, "[d3d12]   no command list was part way through\n");
++                }
++            }
++
++            D3D12_DRED_PAGE_FAULT_OUTPUT1 fault = {};
++            if (SUCCEEDED(dred->GetPageFaultAllocationOutput1(&fault))) {
++                fprintf(stderr, "[d3d12]   page fault address 0x%llX\n", (unsigned long long)(fault.PageFaultVA));
++                int shown = 0;
++                for (const D3D12_DRED_ALLOCATION_NODE1 *node = fault.pHeadExistingAllocationNode; (node != nullptr) && (shown < 16); node = node->pNext, shown++) {
++                    fprintf(stderr, "[d3d12]     existing \"%ls\" type %d\n", node->ObjectNameW ? node->ObjectNameW : L"", int(node->AllocationType));
++                }
++
++                for (const D3D12_DRED_ALLOCATION_NODE1 *node = fault.pHeadRecentFreedAllocationNode; (node != nullptr) && (shown < 32); node = node->pNext, shown++) {
++                    fprintf(stderr, "[d3d12]     freed \"%ls\" type %d\n", node->ObjectNameW ? node->ObjectNameW : L"", int(node->AllocationType));
++                }
++            }
++
++            dred->Release();
++        }
++
++        fflush(stderr);
++    }
++
+     // D3D12Device
+ 
+     D3D12Device::D3D12Device(D3D12Interface *renderInterface, const std::string &preferredDeviceName) {
+@@ -4180,6 +4243,16 @@ namespace plume {
+         // Create DXGI Factory.
+         UINT dxgiFactoryFlags = 0;
+ 
++        // GT64: DRED's breadcrumbs and page fault tracking, for reportDeviceRemoved.
++        {
++            ID3D12DeviceRemovedExtendedDataSettings1 *dredSettings = nullptr;
++            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings)))) {
++                dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
++                dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
++                dredSettings->Release();
++            }
++        }
++
+ #   ifdef D3D12_DEBUG_LAYER_ENABLED
+         ID3D12Debug1 *debugController;
+         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {

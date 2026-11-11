@@ -101,6 +101,9 @@ endfunction()
 # Vsync (FIFO) presentation blocks indefinitely while the window is hidden on some drivers (NVIDIA + Wayland), which
 # would stall the game. RT64 skips presenting while the last present hasn't reached the screen (via present wait).
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/plume ${CMAKE_SOURCE_DIR}/patches/deps/plume-wait-for-last-present.patch)
+# D3D12: when the device is removed, the reason and DRED's breadcrumbs go to the log before the renderer's threads crash
+# on the null buffers.
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/plume ${CMAKE_SOURCE_DIR}/patches/deps/plume-device-removed-report.patch)
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-skip-present-while-hidden.patch)
 # Frame matching read look at entries that don't exist when the game hasn't loaded a look at (crash on environment
 # mapped surfaces, e.g. the Embassy right after GT_LEVEL warps into it).
@@ -167,6 +170,10 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-interp-repeated-kinds.patch)
 # S2DEX backgrounds with zero or out-of-range sizes (from a stale display list) are skipped instead of dividing by zero.
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-s2dex-bg-guard.patch)
+# The crack fill, depth of field and motion blur passes read a copy of the colour target: one copy per target size, kept
+# alive (a frame with two sizes of target, GT64 leaving a race or qualifying, copied into the wrong-sized one and the
+# device was removed).
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-crack-fill-copies.patch)
 
 apply_dependency_patches()
 
