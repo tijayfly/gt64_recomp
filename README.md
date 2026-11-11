@@ -73,8 +73,8 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   round tyres and five-spoke alloy rims. *Off* keeps the original wheels.
 - **Traction control.** General > Traction Control (off by default): Adjusts throttle when slip is detected to minimise
   wheelspin and oversteer.
-- **Reduce AI aggression.** General > Reduce AI Aggression (on by default): opponents brake instead of driving into
-  your car.
+- **Reduce AI aggression.** General > Reduce AI Aggression (on by default): opponents still follow the racing line,
+  but are less likely to make contact when cornering side-by-side.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black, in races and the intro.
 - **N64-era limitations fixed.** Opponents keep their wheels and shadows instead of switching them on and off
   with distance, and wheels no longer show a stale position for a frame when they reappear.
