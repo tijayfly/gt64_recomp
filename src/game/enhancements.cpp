@@ -1825,7 +1825,7 @@ namespace {
             vz[k] = rd64f(rdram, 0x80094990u + ((v >> 12) & 3) * 8) + rd32f(rdram, verts + (v & 0xFFF) * 8 + 4);
         }
     }
-    bool on_track(uint8_t* rdram, uint32_t track, double x, double z) {
+    bool on_track(uint8_t* rdram, uint32_t track, double x, double z, double reach = 0.0) {
         const uint32_t count = rd16(rdram, track);
         for (uint32_t i = 0; i < count; i++) {
             double vx[16], vz[16];
@@ -1835,7 +1835,8 @@ namespace {
             bool in = true;
             for (uint32_t k = 0; k < nv && in; k++) {
                 const uint32_t m = (k + 1) % nv;
-                in = (z - vz[k]) * (vx[m] - vx[k]) - (vz[m] - vz[k]) * (x - vx[k]) >= 0.0;
+                // (`reach` units outside an edge still counts.)
+                in = (z - vz[k]) * (vx[m] - vx[k]) - (vz[m] - vz[k]) * (x - vx[k]) >= -reach * std::hypot(vx[m] - vx[k], vz[m] - vz[k]);
             }
             if (in) return true;
         }
@@ -1862,7 +1863,7 @@ extern "C" void gt_wall_test(uint8_t* rdram, uint32_t car) {
     if ((wall_steps + 1) % uint32_t(every) == 0 && teleport && group >= 0x80000000u && group < 0x80800000u) {
         const uint32_t track = rd32(rdram, group + 0x64);
         static uint32_t trials = 0, escapes = 0;
-        if (trials != 0 && !on_track(rdram, track, x, z)) {
+        if (trials != 0 && !on_track(rdram, track, x, z, 3.0)) {
             escapes++;
             std::fprintf(stderr, "[walltest] ESCAPE %u of %u trials: at %.0f %.0f\n", escapes, trials, x, z);
             for (uint32_t i = 0; i < 6; i++) std::fprintf(stderr, "      %s\n", wall_history[(wall_history_at + i) % 6].c_str());
@@ -1874,7 +1875,8 @@ extern "C" void gt_wall_test(uint8_t* rdram, uint32_t car) {
         double vx[16], vz[16];
         for (int tries = 0; tries < 200; tries++) {
             poly = uint32_t(wall_rand() * count) % count;
-            if ((rd16(rdram, rd32(rdram, track + 8) + poly * 32 + 2) & 0xF0) != 0) break;
+            static const uint32_t want = std::getenv("GT_WALLTEST_FLAGS") ? uint32_t(std::strtoul(std::getenv("GT_WALLTEST_FLAGS"), nullptr, 16)) : 0xF0;
+            if ((rd16(rdram, rd32(rdram, track + 8) + poly * 32 + 2) & want) != 0) break;
         }
         track_polygon(rdram, track, poly, vx, vz, nv);
         double px = 0.0, pz = 0.0;
@@ -1951,6 +1953,46 @@ namespace {
     }
 }
 
+// The last resort: the track's polygons end at its barriers, so a car whose centre is on none of them is outside the
+// track, however it got there. It's put back where its centre was last on one (the step before), keeping its heading
+// and speed, so at worst it's held at the barrier until it's steered or slowed away.
+namespace {
+    constexpr double wall_net_reach = 2.0;   // units outside a polygon's edge that still count as on it
+
+    struct WallNet {
+        bool have = false;
+        double x = 0.0, z = 0.0;
+    };
+    WallNet wall_nets[4];
+
+    void wall_net(uint8_t* rdram, recomp_context* ctx, uint32_t car, uint32_t obj, uint32_t group) {
+        static const bool off = std::getenv("GT_WALLNET_OFF") != nullptr;
+        const uint32_t track = rd32(rdram, group + 0x64);
+        if (off || track < 0x80000000u || track >= 0x80800000u) return;
+        WallNet& net = wall_nets[((car - 0x80162E20u) / 0x3F0u) & 3];
+        const double x = rd64f(rdram, obj + 0x40), z = rd64f(rdram, obj + 0x50);
+        if (on_track(rdram, track, x, z, wall_net_reach)) {
+            net = { true, x, z };
+            return;
+        }
+        // (Not after the car's been placed somewhere else, or with no place known.)
+        if (!net.have || std::hypot(x - net.x, z - net.z) > wall_shift_limit) {
+            net.have = false;
+            return;
+        }
+        for (const uint32_t at : { obj + 0x40, obj + 0x120, car + 0x8 + 0x78, car + 0xB0 + 0x78 }) {
+            wr64f(rdram, at, rd64f(rdram, at) + (net.x - x));
+            wr64f(rdram, at + 0x10, rd64f(rdram, at + 0x10) + (net.z - z));
+        }
+        track_corners(rdram, ctx, car);
+        static uint32_t logged = 0;
+        if (logged++ < 40) {
+            std::fprintf(stderr, "[wall] f%u car outside the track at %.0f %.0f (heading %.0f, %.0f km/h): put back at %.0f %.0f\n", game_frame, x, z,
+                rd64f(rdram, car + 0x3B8), rd64f(rdram, car + 0x110), net.x, net.z);
+        }
+    }
+}
+
 extern "C" void gt_wall_after(uint8_t* rdram, recomp_context* ctx, uint32_t car) {
     if (car < 0x80000000u || car >= 0x80800000u || !controller_car(car)) return;
     static const bool log = std::getenv("GT_WALLLOG") != nullptr;
@@ -2003,7 +2045,10 @@ extern "C" void gt_wall_after(uint8_t* rdram, recomp_context* ctx, uint32_t car)
             std::fprintf(stderr, "[trail] %u %.1f %.1f %.1f %d\n", wall_steps, x, z, rd64f(rdram, car + 0x3B8), int(on_track(rdram, track, x, z)));
         }
     }
-    if (!any && !off) return;
+    if (!any && !off) {
+        wall_net(rdram, ctx, car, obj, group_at);
+        return;
+    }
     double moved_x = 0.0, moved_z = 0.0;
     int passes = 0;
     double worst_left = 0.0;
@@ -2051,4 +2096,5 @@ extern "C" void gt_wall_after(uint8_t* rdram, recomp_context* ctx, uint32_t car)
         std::fprintf(stderr, "[wall] f%u mask %X moved %.1f %.1f in %d, left %.1f; speed %.0f heading %.0f travel %.0f\n", game_frame, mask,
             moved_x, moved_z, passes, worst_left, rd64f(rdram, car + 0x110), rd64f(rdram, car + 0x3B8), rd64f(rdram, car + 0x3C0));
     }
+    wall_net(rdram, ctx, car, obj, group_at);
 }
