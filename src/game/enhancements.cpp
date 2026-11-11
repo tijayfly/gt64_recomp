@@ -1604,18 +1604,22 @@ extern "C" void gt_section_result(uint8_t* rdram, recomp_context* ctx) {
 // player's car that's ahead of it and less than two car widths to the side of its heading (its last move) is held to
 // the player's own speed along it (less what it'd lose in a few more moves if it's braking), plus what closes in to
 // ai_gap over ai_horizon moves: it brakes with the player rather than drive into it. Held back to under half its speed for over ~3 s (the player stopped on
-// its line), it's let go.
+// its line), it's let go. Once no longer held back, it's eased back up to its own speed over ai_recover_frames rather
+// than the game's quicker acceleration.
 namespace {
     constexpr double ai_gap = 360.0;     // from the opponent's centre to the player's, along its heading (a car is ~230 long)
     constexpr double ai_width = 200.0;   // to the side: two car widths (a car is ~100 wide)
     constexpr double ai_horizon = 12.0;  // moves to close in to ai_gap over (the game moves opponents a few times a frame)
     constexpr double ai_brake_lookahead = 4.0;  // moves of the player's braking assumed to continue
     constexpr uint32_t ai_hold_limit = 90; // frames (3 s)
+    constexpr double ai_recover_frames = 90.0;  // frames to ease back up from a standstill to its own speed (3 s)
     struct AiState {
         double x = 0.0, z = 0.0;         // position before this frame's move
         double dx = 0.0, dz = 0.0;       // heading: the last move, normalised
         bool heading = false;
         uint32_t held_since = 0;         // the frame (game_frame) it was first held back to under half its speed, or 0
+        double eased = -1.0;             // the speed it was last held back to (or -1: not easing back up)
+        uint32_t eased_frame = 0;        // the frame that was on
         uint32_t moves = 0;              // this opponent's moves so far
         double px[9] = {}, pz[9] = {};   // each player's position at its previous move, by id
         double pv[9] = {};               // and the player's speed along its heading then
@@ -1641,7 +1645,10 @@ extern "C" void gt_ai_before_move(uint8_t* rdram, uint32_t rec) {
     const double ax = rd64f(rdram, obj + 0x40), az = rd64f(rdram, obj + 0x50);
     ai.x = ax;
     ai.z = az;
-    if (gt::get_reduce_ai_aggression() != gt::ReduceAiAggression::On || !ai.heading) return;
+    if (gt::get_reduce_ai_aggression() != gt::ReduceAiAggression::On || !ai.heading) {
+        ai.eased = -1.0;
+        return;
+    }
     const float speed = rd32f(rdram, rec + 0x54);
     if (!(speed > 0.0f)) return;
     const int ring = std::max(section_ring(rdram), 1);
@@ -1694,9 +1701,22 @@ extern "C" void gt_ai_before_move(uint8_t* rdram, uint32_t rec) {
         ai.held_since = game_frame;
     }
     else if (game_frame - ai.held_since > ai_hold_limit) {
-        return;
+        allowed = speed;  // let go
     }
-    if (allowed >= speed) {
+    if (allowed < speed) {
+        ai.eased = allowed;
+        ai.eased_frame = game_frame;
+    }
+    else if (ai.eased >= 0.0) {
+        // Easing back up: from the speed it was held to, gaining its own speed's worth over ai_recover_frames.
+        const double cap = ai.eased + speed * double(game_frame - ai.eased_frame) / ai_recover_frames;
+        if (cap >= speed) {
+            ai.eased = -1.0;
+            return;
+        }
+        allowed = cap;
+    }
+    else {
         return;
     }
     static const bool log = std::getenv("GT_AIBRAKE_LOG") != nullptr;
@@ -1719,6 +1739,7 @@ extern "C" void gt_ai_after_move(uint8_t* rdram) {
     if (len >= 500.0) {
         ai.heading = false;
         ai.held_since = 0;
+        ai.eased = -1.0;
     }
     else if (len > 0.5) {
         ai.heading = true;
