@@ -10,10 +10,6 @@ Gamepad support · any resolution · uncapped framerate · widescreen races · e
 
 ---
 
-> [!WARNING]
-> **Work in progress.** The boot logos, intro, menus, races, replays and saves work (tested on Windows; the Linux
-> build runs headless). See [Status](#status).
-
 This is a static recompilation of *GT 64: Championship Edition* (N64, USA) made with
 [N64Recomp](https://github.com/N64Recomp/N64Recomp). The game's MIPS code is translated to C, compiled for your PC
 and run on [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime), with [RT64](https://github.com/rt64/rt64)
