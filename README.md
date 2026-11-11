@@ -75,7 +75,6 @@ for rendering. It is not an emulator: the game runs as a native program. The app
   wheelspin and oversteer.
 - **Reduce AI aggression.** General > Reduce AI Aggression (on by default): opponents still follow the racing line,
   but are less likely to make contact when cornering side-by-side.
-- **Pause hides messages.** Race messages on screen are hidden while the pause menu is open.
 - **Softer car shadows.** Filtered and blended at about half strength instead of solid black, in races and the intro.
 - **N64-era limitations fixed.** Opponents keep their wheels and shadows instead of switching them on and off
   with distance, and wheels no longer show a stale position for a frame when they reappear.
