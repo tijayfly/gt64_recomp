@@ -1073,6 +1073,26 @@ namespace {
 
 namespace { uint32_t part_obj = 0; }
 
+// The 5ZIGEN Supra's opponent model (the detail level drawn for a car that isn't the player's, up close) has a stray
+// vertex load in the list of its black inner panels: after the 32 vertices they use (040081FF 0200A868, shared by the
+// Supras) it loads 9 more over vertices 6-14 (040C248F 0500A7F8), which no other car's list does. Two panels then come
+// out as black triangles from the car's tail to its nose along its left side, a black line through the wheels and door.
+// The load is taken out (a no-op) wherever the car's model is in memory: a car type's models are segment 5 while its
+// parts are drawn, its address from D_80110050[type]; the list is at +0xA9F0 of the 5ZIGEN's.
+namespace {
+    void fix_car_model(uint8_t* rdram, uint32_t type) {
+        if (type == 0 || type >= 16) return;
+        const uint32_t base = rd32(rdram, 0x80110050u + type * 4);
+        if (base < 0x80000000u || base >= 0x80800000u - 0xAA00u) return;
+        const uint32_t at = base + 0xA9F0u;
+        if (rd32(rdram, at) == 0x040081FFu && rd32(rdram, at + 4) == 0x0200A868u && rd32(rdram, at + 8) == 0x040C248Fu &&
+            rd32(rdram, at + 12) == 0x0500A7F8u) {
+            wr32(rdram, at + 8, 0);
+            wr32(rdram, at + 12, 0);
+        }
+    }
+}
+
 extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
     part_group_open = false;
     const uint32_t obj = rd32(rdram, node + 0x14);
@@ -1083,6 +1103,7 @@ extern "C" void gt_part_begin(uint8_t* rdram, uint32_t node) {
     if (flag != 0x60 && flag != 0x20) {
         return;   // not a car's body, wheel or shadow
     }
+    fix_car_model(rdram, rd16(rdram, obj + 2));
     uint32_t id = 2166136261u;
     auto mix = [&](uint8_t b) { id = (id ^ b) * 16777619u; };
     const uint16_t car = rd16(rdram, obj + 2);
