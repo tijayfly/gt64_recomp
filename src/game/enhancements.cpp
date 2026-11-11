@@ -1601,14 +1601,15 @@ extern "C" void gt_section_result(uint8_t* rdram, recomp_context* ctx) {
 // Reduce AI Aggression (General > Reduce AI Aggression). Opponents don't drive with the car physics: each step of
 // the car update, func_80028520 runs one along its line (its record, D_80162758 + (id - 1) * 0xA8, has its speed in units per
 // move at +0x54) and func_800276E4 then moves it that far. Just before the move, an opponent within a section of a
-// player's car that's ahead of it and less than a car's width to the side of its heading (its last move) is held to
-// the player's own speed along it, plus what keeps it from closing in to under ai_gap within ai_horizon moves: it
-// brakes rather than drive into the player. Held back to under half its speed for over ~3 s (the player stopped on
+// player's car that's ahead of it and less than two car widths to the side of its heading (its last move) is held to
+// the player's own speed along it (less what it'd lose in a few more moves if it's braking), plus what closes in to
+// ai_gap over ai_horizon moves: it brakes with the player rather than drive into it. Held back to under half its speed for over ~3 s (the player stopped on
 // its line), it's let go.
 namespace {
-    constexpr double ai_gap = 300.0;     // from the opponent's centre to the player's, along its heading (a car is ~230 long)
-    constexpr double ai_width = 110.0;   // to the side (a car is ~100 wide)
-    constexpr double ai_horizon = 24.0;  // moves ahead (the game moves opponents about 4 times a frame)
+    constexpr double ai_gap = 360.0;     // from the opponent's centre to the player's, along its heading (a car is ~230 long)
+    constexpr double ai_width = 200.0;   // to the side: two car widths (a car is ~100 wide)
+    constexpr double ai_horizon = 12.0;  // moves to close in to ai_gap over (the game moves opponents a few times a frame)
+    constexpr double ai_brake_lookahead = 4.0;  // moves of the player's braking assumed to continue
     constexpr uint32_t ai_hold_limit = 90; // frames (3 s)
     struct AiState {
         double x = 0.0, z = 0.0;         // position before this frame's move
@@ -1617,6 +1618,7 @@ namespace {
         uint32_t held_since = 0;         // the frame (game_frame) it was first held back to under half its speed, or 0
         uint32_t moves = 0;              // this opponent's moves so far
         double px[9] = {}, pz[9] = {};   // each player's position at its previous move, by id
+        double pv[9] = {};               // and the player's speed along its heading then
         uint32_t seen[9] = {};           // the move (moves) those were taken on
     };
     std::unordered_map<uint32_t, AiState> ai_states;   // by object
@@ -1654,14 +1656,21 @@ extern "C" void gt_ai_before_move(uint8_t* rdram, uint32_t rec) {
         const double px = rd64f(rdram, player + 0x40), pz = rd64f(rdram, player + 0x50);
         // The player's own move since this opponent's previous one, along its heading.
         double player_speed = 0.0;
+        bool tracked = false;
         if (ai.seen[id] + 1 == ai.moves) {
             const double mx = px - ai.px[id], mz = pz - ai.pz[id];
             if (mx * mx + mz * mz < 500.0 * 500.0) {
                 player_speed = std::max(0.0, mx * ai.dx + mz * ai.dz);  // not slowed further for a player coming towards it
+                tracked = true;
             }
         }
+        // A player braking: the speed it'll be down to a few moves on if it keeps braking, so the opponent brakes with
+        // it rather than a move or more behind.
+        const double slowing = (tracked && ai.seen[id] != 0) ? std::max(0.0, ai.pv[id] - player_speed) : 0.0;
+        const double expected_speed = std::max(0.0, player_speed - slowing * ai_brake_lookahead);
         ai.px[id] = px;
         ai.pz[id] = pz;
+        ai.pv[id] = tracked ? player_speed : 0.0;
         ai.seen[id] = ai.moves;
         int dsec = std::abs(int(rd16(rdram, player + 0x16A)) - ai_section);
         dsec = std::min(dsec, ring - dsec);
@@ -1671,7 +1680,7 @@ extern "C" void gt_ai_before_move(uint8_t* rdram, uint32_t rec) {
         const double side = std::fabs(rx * ai.dz - rz * ai.dx);
         if (along <= 0.0 || side > ai_width) continue;
         // As fast as keeps it from closing in to under ai_gap within ai_horizon moves.
-        const double keep = std::max(0.0, player_speed + (along - ai_gap) / ai_horizon);
+        const double keep = std::max(0.0, expected_speed + (along - ai_gap) / ai_horizon);
         if (keep < allowed) {
             allowed = keep;
             nearest_gap = along;
