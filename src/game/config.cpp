@@ -114,19 +114,6 @@ static void add_general_options(recomp::config::Config &config) {
         traction_control_options,
         gt::TractionControl::Off
     );
-
-    static EnumOptionVector pause_hides_messages_options = {
-        {gt::PauseHidesMessages::Off, "Off", "Off"},
-        {gt::PauseHidesMessages::On, "On", "On"},
-    };
-    config.add_enum_option(
-        gt::configkeys::general::pause_hides_messages,
-        "Pause Hides Messages",
-        "<recomp-color primary>On</recomp-color>: Race messages on screen are hidden while the pause menu is open. "
-        "<recomp-color primary>Off</recomp-color>: Messages stay visible under the pause menu, as in the original game.",
-        pause_hides_messages_options,
-        gt::PauseHidesMessages::On
-    );
 }
 
 gt::SlipRumble gt::get_slip_rumble() {
@@ -135,10 +122,6 @@ gt::SlipRumble gt::get_slip_rumble() {
 
 gt::TractionControl gt::get_traction_control() {
     return static_cast<gt::TractionControl>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::traction_control)));
-}
-
-gt::PauseHidesMessages gt::get_pause_hides_messages() {
-    return static_cast<gt::PauseHidesMessages>(std::get<uint32_t>(recompui::config::get_general_config().get_option_value(gt::configkeys::general::pause_hides_messages)));
 }
 
 gt::ReduceAiAggression gt::get_reduce_ai_aggression() {

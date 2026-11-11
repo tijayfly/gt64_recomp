@@ -18,7 +18,6 @@ namespace gt {
             inline const std::string slip_rumble = "slip_rumble";
             inline const std::string reduce_ai_aggression = "reduce_ai_aggression";
             inline const std::string traction_control = "traction_control";
-            inline const std::string pause_hides_messages = "pause_hides_messages";
         }
     }
 
@@ -53,11 +52,6 @@ namespace gt {
         On, // opponents slow down rather than drive into a player's car ahead of them on their line
     };
 
-    enum class PauseHidesMessages {
-        Off,
-        On,
-    };
-
     enum class TractionControl {
         Off,
         On, // the throttle is held back while the car's wheels spin or it slides
@@ -85,7 +79,6 @@ namespace gt {
     SlipRumble get_slip_rumble();
     ReduceAiAggression get_reduce_ai_aggression();
     TractionControl get_traction_control();
-    PauseHidesMessages get_pause_hides_messages();
     DrawDistance get_draw_distance();
     HdWheels get_hd_wheels();
     DepthOfField get_depth_of_field();

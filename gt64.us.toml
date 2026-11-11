@@ -304,7 +304,7 @@ func = "func_8002E574"
 before_vram = 0x8002E574
 text = "{ void gt_wall_test_move(uint8_t*, uint32_t); gt_wall_test_move(rdram, (uint32_t)ctx->r4); }"
 
-# Pause Hides Messages (gt_pause_texts): before the frame's text is drawn (func_8000CA9C).
+# Race messages hidden while paused (gt_pause_texts): before the frame's text is drawn (func_8000CA9C).
 [[patches.hook]]
 func = "func_8000CA9C"
 before_vram = 0x8000CA9C

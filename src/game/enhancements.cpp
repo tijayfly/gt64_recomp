@@ -2203,14 +2203,14 @@ extern "C" void gt_wall_after(uint8_t* rdram, recomp_context* ctx, uint32_t car)
     wall_net(rdram, ctx, car, obj, group_at);
 }
 
-// Pause Hides Messages. The race's messages (ROLLING START!!, READY!, GO!!, LAP and the lap time, FINAL LAP, WRONG WAY!...)
+// Race messages hidden while paused. The race's messages (ROLLING START!!, READY!, GO!!, LAP and the lap time, FINAL LAP, WRONG WAY!...)
 // are lines of text the race's objects add to the frame's text list each frame (func_8000CD84: entries of 0x14 at
 // D_8013F628 + buffer * 0x1400, string, x, y, font, colour; the count at D_8013F624 + buffer * 2). Paused (D_800DB24D & 0xC)
 // the objects stop and the list isn't cleared (func_8000C8A0 isn't called), so whatever was on screen stayed there under
 // the pause menu, which is drawn separately. Paused, the drawing (func_8000CA9C) leaves out the lines away from the top
 // left: the timer and lap times stay. The list is rebuilt when the game carries on.
 extern "C" void gt_pause_texts(uint8_t* rdram) {
-    if ((rd8(rdram, 0x800DB24Du) & 0xC) != 0xC || gt::get_pause_hides_messages() != gt::PauseHidesMessages::On) return;
+    if ((rd8(rdram, 0x800DB24Du) & 0xC) != 0xC) return;
     const uint32_t buffer = rd8(rdram, 0x8011A595u) & 1;
     const uint32_t count_at = 0x8013F624u + buffer * 2;
     const uint32_t list = 0x8013F628u + buffer * 0x1400u;
