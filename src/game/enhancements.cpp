@@ -726,7 +726,18 @@ extern "C" void gt_pedal_end(uint8_t* rdram, int brake) {
 //   D_8010FFC8): both moved there too;
 // - the sections' geometry: it's streamed (see gt_track_segment).
 namespace {
-    constexpr uint32_t ext_nodes = 0x80400000u;     // list nodes past the game's pool (0x10000)
+    constexpr uint32_t ext_nodes = 0x80400000u;     // list nodes past the game's pool (0x6000)
+    // The two object lists (one per frame buffer: a count, then a record of 0x78 for each object drawn: car bodies,
+    // wheels, shadows, scenery, dust and sparks). The game's own (D_80110928, 0x1E08 each) hold 64 records and nothing
+    // checks: a 65th in the second list was written over the view matrix and the current track pointer after it
+    // (D_80114540, D_80114580), and with that zero the track was never drawn again (cars over an empty sky until the
+    // race was left); in the first list it was written over the second. Drawing all the cars in full puts a starting
+    // grid near 64, and dust or sparks then went past it. Moved here, with room for 160 and the rest not drawn.
+    constexpr uint32_t game_objects = 0x80110928u;
+    constexpr uint32_t game_objects_size = 0x1E08u;
+    constexpr uint32_t ext_objects = 0x80406000u;
+    constexpr uint32_t ext_objects_size = 0x5000u;
+    constexpr uint32_t ext_objects_max = 160;
     // Two display list buffers of 0x18000 and two matrix buffers of 0x20000. A frame takes about 0x7C and 0x170 bytes
     // per track section (EUR GP Short's whole ring of 165: 0x5040 and 0xE900), and Maximum draws only the sections
     // within max_draw_offset. 0x80480000 on: HD wheels (src/game/hd_wheels.cpp).
@@ -844,11 +855,54 @@ namespace {
     }
 }
 
+// An address in the game's object lists, moved to the ones in the Expansion Pak (see ext_objects).
+extern "C" uint32_t gt_object_list(uint32_t address) {
+    if (address < game_objects || address >= game_objects + 2 * game_objects_size) {
+        return address;
+    }
+    const uint32_t index = (address - game_objects) / game_objects_size;
+    return ext_objects + index * ext_objects_size + (address - game_objects) % game_objects_size;
+}
+
+extern "C" void gt_object_lists_reset(uint8_t* rdram) {
+    wr16(rdram, ext_objects, 0);
+    wr16(rdram, ext_objects + ext_objects_size, 0);
+}
+
+// func_8000BB70 (adds the current object to the list being built): not past the list's end.
+extern "C" int32_t gt_object_list_full(uint8_t* rdram) {
+    const uint32_t index = rdram[(0x8011A594u ^ 3) - 0x80000000u] & 1;
+    const uint32_t count = rd16(rdram, ext_objects + index * ext_objects_size);
+    if (std::getenv("GT_OBJLOG")) {
+        static uint32_t most = 0;
+        if (count + 1 > most) {
+            most = count + 1;
+            std::fprintf(stderr, "[objects] f%u %u in the list\n", game_frame, most);
+        }
+    }
+    return count >= ext_objects_max;
+}
+
+// The object list's nodes (func_80009370, func_80009698: D_8011BA38 is moved on to the next free node with nothing
+// checking for the pool's end, which is D_8011BA38 itself): past the game's pool they go to the Expansion Pak, as the
+// track sections' do (gt_add_section).
+extern "C" uint32_t gt_node_next(uint32_t next) {
+    constexpr uint32_t pool_end = 0x8011BA38u;
+    if (next < ext_nodes && next + 0x28 > pool_end) {
+        return ext_nodes;
+    }
+    if (next >= ext_nodes && next + 0x28 > ext_objects) {
+        return ext_objects - 0x28;   // (never seen: the last node again)
+    }
+    return next;
+}
+
 // The section a race view draws the track from (its +0xF8, copied from the camera's each frame) is the ring section
 // nearest the camera, found by a search around the last one. Off the track it has been seen to end up on a section far
 // from the camera, and the whole track was then drawn away from it (nothing in sight but the cars and sky). When the
 // view's section is well over twice as far from the camera as the nearest one, the view starts from the nearest instead
 // (logged). Only this frame's drawing changes: the game's own state is untouched.
+static int32_t vl_nearest = -1; static double vl_nearest_d = 0, vl_start_d = 0;
 extern "C" void gt_view_start(uint8_t* rdram, uint32_t view) {
     const uint32_t base = rd32(rdram, 0x80114584u);
     const int32_t ring = section_ring(rdram);
@@ -873,6 +927,7 @@ extern "C" void gt_view_start(uint8_t* rdram, uint32_t view) {
     }
     const double start_d = (start >= 0 && start < ring) ? std::sqrt(dist2(start)) : 1e30;
     const double nearest_d = std::sqrt(nearest_d2);
+    vl_nearest = nearest; vl_nearest_d = nearest_d; vl_start_d = start_d;
     const double spacing = section_spacing(rdram);
     const double slack = std::max(3000.0, 3.0 * spacing);
     if (start_d > 2.0 * nearest_d + slack) {
@@ -1026,7 +1081,7 @@ extern "C" void gt_wheel_drawn(uint8_t* rdram) {
         return;
     }
     const uint8_t index = rdram[(0x8011A594u ^ 3) - 0x80000000u];
-    const uint32_t list = 0x80110928u + uint32_t(index) * 0x1E08u;
+    const uint32_t list = ext_objects + uint32_t(index & 1) * ext_objects_size;
     const uint16_t count = rd16(rdram, list);
     if (count > 0) {
         wr16(rdram, list, uint16_t(count - 1));
@@ -1186,6 +1241,12 @@ extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
             std::fprintf(stderr, "[track] f%u no track drawn: start section %d of %d, %u dropped, camera %.0f %.0f %.0f\n", game_frame,
                 frame_start_section, section_ring(rdram), frame_sections_dropped, rd64f(rdram, cam + 0xD8), rd64f(rdram, cam + 0xE0), rd64f(rdram, cam + 0xE8));
         }
+    }
+    if (std::getenv("GT_VIEWLOG") && views_this_frame > 0) {
+        const uint32_t cam = rd32(rdram, 0x8010FFCCu);
+        std::fprintf(stderr, "[view] f%u start %d (%.0f) nearest %d (%.0f) added %u dropped %u cam %.0f %.0f %.0f\n", game_frame, frame_start_section, vl_start_d, vl_nearest, vl_nearest_d,
+            frame_sections_added, frame_sections_dropped, rd64f(rdram, cam + 0xD8), rd64f(rdram, cam + 0xE0), rd64f(rdram, cam + 0xE8));
+        std::fflush(stderr);
     }
     frame_sections_added = 0;
     frame_sections_dropped = 0;
@@ -2167,7 +2228,7 @@ extern "C" void gt_wall_after(uint8_t* rdram, recomp_context* ctx, uint32_t car)
         static const bool trail = std::getenv("GT_WALLTRAIL") != nullptr;
         if (trail) {
             const double x = rd64f(rdram, obj + 0x40), z = rd64f(rdram, obj + 0x50);
-            std::fprintf(stderr, "[trail] %u %.1f %.1f %.1f %d\n", wall_steps, x, z, rd64f(rdram, car + 0x3B8), int(on_track(rdram, track, x, z)));
+            std::fprintf(stderr, "[trail] %u %.1f %.1f %.1f %d y %.1f\n", wall_steps, x, z, rd64f(rdram, car + 0x3B8), int(on_track(rdram, track, x, z)), rd64f(rdram, obj + 0x48));
         }
     }
     if (!any && !off) {

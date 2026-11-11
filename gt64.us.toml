@@ -240,6 +240,49 @@ func = "func_80028604"
 before_vram = 0x800287F8
 text = "{ void gt_car_detail(uint8_t*); gt_car_detail(rdram); }"
 
+# The object lists (D_80110928: 64 records each, nothing checked; a 65th was written over the view matrix and the track
+# pointer, and the track was never drawn again): moved to the Expansion Pak with room for 160 (gt_object_list), and the
+# list's nodes kept inside their pool (gt_node_next).
+[[patches.hook]]
+func = "func_80008858"
+before_vram = 0x80008BDC
+text = "{ void gt_object_lists_reset(uint8_t*); gt_object_lists_reset(rdram); }"
+
+[[patches.hook]]
+func = "func_80008F10"
+before_vram = 0x80008F48
+text = "{ uint32_t gt_object_list(uint32_t); ctx->r1 = (int64_t)(int32_t)(gt_object_list((uint32_t)ctx->r1 + 0x928) - 0x928); }"
+
+[[patches.hook]]
+func = "func_80009370"
+before_vram = 0x80009398
+text = "{ uint32_t gt_object_list(uint32_t); ctx->r24 = (int64_t)(int32_t)(gt_object_list((uint32_t)ctx->r24 + 0x928) - 0x928); }"
+
+[[patches.hook]]
+func = "func_80009370"
+before_vram = 0x800095A4
+text = "{ uint32_t gt_node_next(uint32_t); ctx->r14 = (int64_t)(int32_t)gt_node_next((uint32_t)ctx->r14); }"
+
+[[patches.hook]]
+func = "func_80009370"
+before_vram = 0x800095CC
+text = "{ uint32_t gt_object_list(uint32_t); ctx->r3 = (int64_t)(int32_t)gt_object_list((uint32_t)ctx->r3); }"
+
+[[patches.hook]]
+func = "func_80009698"
+before_vram = 0x80009A38
+text = "{ uint32_t gt_node_next(uint32_t); ctx->r14 = (int64_t)(int32_t)gt_node_next((uint32_t)ctx->r14); }"
+
+[[patches.hook]]
+func = "func_8000BB70"
+before_vram = 0x8000BB70
+text = "{ int32_t gt_object_list_full(uint8_t*); if (gt_object_list_full(rdram)) return; }"
+
+[[patches.hook]]
+func = "func_8000BB70"
+before_vram = 0x8000BB9C
+text = "{ uint32_t gt_object_list(uint32_t); ctx->r3 = (int64_t)(int32_t)gt_object_list((uint32_t)ctx->r3); }"
+
 # The object list's view cone (func_80009698): past 1000 units, objects are only drawn within 45 degrees either side
 # of the camera's heading (90), wide enough for 4:3. With an extended draw distance (gt_cone_half_angle), wider for
 # widescreen; the distance limits are set in gt_sections_behind. (Drawing them all around the camera put cars behind
