@@ -48,6 +48,8 @@ namespace {
 }
 
 extern "C" void gt_on_rom_read(uint32_t rom, uint32_t ram, uint32_t size) {
+    static const bool read_log = std::getenv("GT_ROMREAD_LOG") != nullptr;
+    if (read_log) std::fprintf(stderr, "[romread] rom %08X ram %08X size %X\n", rom, ram, size);
     if (rom == ovl_front_rom && ram == ovl_front_ram) {
         front_overlay_loads++;
     }
@@ -1182,12 +1184,113 @@ extern "C" void gt_matrix_buffer(uint8_t* rdram, uint32_t index) {
 // having been built again: leaving a race, GT64 submits its last race frame once more after the next screen's data has
 // been loaded over the cars' and track's (on the N64 its own buffer has been rewritten by then). Its display list then
 // ran into that data, and the renderer crashed or stopped drawing. It's emptied instead (G_ENDDL).
+// Every graphics task's display list is walked before it's sent: one that calls or points outside RDRAM, or runs into
+// commands no microcode GT64 uses has (data read as commands), is emptied instead. Leaving a race or qualifying, the
+// game can submit a frame built from race data the next screen's has since replaced, and drawing that has crashed the
+// renderer (and on Direct3D 12 lost the graphics device).
+namespace {
+    constexpr uint32_t rdram_end = 0x800000u;
+
+    struct DlCheck {
+        uint32_t commands = 0;
+        uint32_t bad_at = 0;     // the bad command's address
+        uint32_t bad_w0 = 0, bad_w1 = 0;
+        const char* why = nullptr;
+    };
+
+    bool dl_command_known(uint32_t op) {
+        // GT64's microcodes are F3D-family (F3DEX, S2DEX): 0x00-0x0B, 0xAF-0xBF and the RDP's 0xC0-0xFF; RT64's
+        // extended commands 0x64.
+        return op <= 0x0B || op >= 0xAF || op == 0x64;
+    }
+
+    DlCheck check_display_list(uint8_t* rdram, uint32_t start) {
+        DlCheck check;
+        uint32_t segments[16] = {};
+        uint32_t stack[32];
+        int depth = 0;
+        uint32_t pc = start & 0x1FFFFFFFu;
+        auto resolve = [&](uint32_t address) -> uint32_t {
+            if ((address & 0x80000000u) != 0) return address & 0x1FFFFFFFu;
+            return (segments[(address >> 24) & 0xF] + (address & 0xFFFFFFu)) & 0x1FFFFFFFu;
+        };
+        auto bad = [&](uint32_t w0, uint32_t w1, const char* why) {
+            check.bad_at = pc | 0x80000000u;
+            check.bad_w0 = w0;
+            check.bad_w1 = w1;
+            check.why = why;
+        };
+        while (check.commands < 400000) {
+            if (pc + 8 > rdram_end || (pc & 7) != 0) { bad(0, 0, "display list outside RDRAM"); return check; }
+            const uint32_t w0 = rd32(rdram, 0x80000000u | pc), w1 = rd32(rdram, 0x80000000u | (pc + 4));
+            check.commands++;
+            const uint32_t op = w0 >> 24;
+            if (!dl_command_known(op)) { bad(w0, w1, "unknown command"); return check; }
+            switch (op) {
+                case 0xB8:  // G_ENDDL
+                    if (depth == 0) return check;
+                    pc = stack[--depth];
+                    continue;
+                case 0x06: {  // G_DL
+                    const uint32_t target = resolve(w1);
+                    if (target + 8 > rdram_end) { bad(w0, w1, "call outside RDRAM"); return check; }
+                    if (((w0 >> 16) & 0xFF) == 0) {   // push
+                        if (depth == 32) { bad(w0, w1, "calls nested too deep"); return check; }
+                        stack[depth++] = pc + 8;
+                    }
+                    pc = target;
+                    continue;
+                }
+                case 0xBC:  // G_MOVEWORD
+                    if ((w0 & 0xFF) == 0x06) segments[(((w0 >> 8) & 0xFFFF) >> 2) & 0xF] = w1 & 0x1FFFFFFFu;
+                    break;
+                case 0xFD:  // G_SETTIMG
+                case 0xFE:  // G_SETZIMG
+                    if (resolve(w1) >= rdram_end) { bad(w0, w1, "image outside RDRAM"); return check; }
+                    break;
+                case 0xFF:  // G_SETCIMG
+                    if (resolve(w1) >= rdram_end || (w0 & 0xFFF) + 1 > 2048) { bad(w0, w1, "colour image out of range"); return check; }
+                    break;
+                default:
+                    break;
+            }
+            pc += 8;
+        }
+        bad(0, 0, "display list never ends");
+        return check;
+    }
+}
+
 extern "C" void gt_gfx_task_check(uint8_t* rdram, uint32_t task) {
     if (rd32(rdram, task) != 1) return;  // M_GFXTASK
     const uint32_t dl = rd32(rdram, task + 0x30) | 0x80000000u;
+    {
+        static const bool check_off = std::getenv("GT_DLCHECK_OFF") != nullptr;
+        const DlCheck check = check_off ? DlCheck{} : check_display_list(rdram, dl);
+        static uint64_t checked = 0, commands = 0;
+        checked++;
+        commands += check.commands;
+        if (check.why != nullptr) {
+            static uint32_t logged = 0;
+            if (logged++ < 40) {
+                std::fprintf(stderr, "[gfxtask] f%u task 0x%08X: %s at 0x%08X (%08X %08X) after %u commands: emptied\n", game_frame, dl, check.why,
+                    check.bad_at, check.bad_w0, check.bad_w1, check.commands);
+            }
+            if (dl + 8 <= 0x80000000u + rdram_end) {
+                wr32(rdram, dl, 0xB8000000u);
+                wr32(rdram, dl + 4, 0);
+            }
+            return;
+        }
+        static const bool stats = std::getenv("GT_DLCHECK_LOG") != nullptr;
+        if (stats && checked % 600 == 0) std::fprintf(stderr, "[gfxtask] %llu tasks checked, %.0f commands each\n", (unsigned long long)checked, double(commands) / double(checked));
+    }
     if (dl < ext_gfx || dl >= ext_gfx + 2 * ext_gfx_size) return;
     const uint32_t buffer = (dl - ext_gfx) / ext_gfx_size;
     const uint32_t build = ext_gfx_built[buffer];
+    static const bool task_log = std::getenv("GT_TASKLOG2") != nullptr;
+    if (task_log) std::fprintf(stderr, "[task] f%u dl %08X buffer %u built f%u loads %u/%u stale %d front %d\n", game_frame, dl, buffer, build,
+        ext_gfx_loads[buffer], front_overlay_loads, int(ext_gfx_stale_race[buffer]), int(ovl_front_loaded));
     auto it = ext_task_build.find(dl);
     // Also any task from a buffer built before the front-end overlay was last read in: leaving a race, the game submits
     // the frame it was building (its HUD list still the last frame's, calling into race data the next screen's has
