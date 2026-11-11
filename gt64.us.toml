@@ -286,3 +286,20 @@ text = "{ void gt_section_result(uint8_t*, recomp_context*); gt_section_result(r
 func = "func_80028520"
 before_vram = 0x80028590
 text = "{ void gt_ai_before_move(uint8_t*, uint32_t); gt_ai_before_move(rdram, (uint32_t)ctx->r16); }"
+
+# Barrier containment (gt_wall_after): after a car's wall response (func_80039AA4, s0 = the car).
+[[patches.hook]]
+func = "func_80032874"
+before_vram = 0x80032AA4
+text = "{ void gt_wall_after(uint8_t*, recomp_context*, uint32_t); gt_wall_after(rdram, ctx, (uint32_t)ctx->r16); }"
+
+# Debug (GT_WALLTEST): before a player's car's physics step (s0 = the car).
+[[patches.hook]]
+func = "func_80031BD4"
+before_vram = 0x80031CBC
+text = "{ void gt_wall_test(uint8_t*, uint32_t); gt_wall_test(rdram, (uint32_t)ctx->r16); }"
+
+[[patches.hook]]
+func = "func_8002E574"
+before_vram = 0x8002E574
+text = "{ void gt_wall_test_move(uint8_t*, uint32_t); gt_wall_test_move(rdram, (uint32_t)ctx->r4); }"
