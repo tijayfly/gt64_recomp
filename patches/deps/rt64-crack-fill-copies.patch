@@ -1,0 +1,280 @@
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+index cd8c334..e0e6d6a 100644
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -1308,17 +1308,19 @@ namespace RT64 {
+             }
+         }
+ 
+-        if (framebuffer.crackFill && (colorTarget != nullptr) && (framebuffer.crackFillSet != nullptr) && (crackFillCopy != nullptr)) {
++        RenderTexture *crackFillCopy = framebuffer.crackFillCopyTexture;
++        if (framebuffer.crackFill && (colorTarget != nullptr) && (framebuffer.crackFillSet != nullptr) && (crackFillCopy != nullptr) &&
++            (crackFillCopy == crackFillCopyFor(nullptr, colorTarget))) {
+             RenderCommandList *commandList = worker->commandList.get();
+             commandList->barriers(RenderBarrierStage::COPY, {
+                 RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COPY_SOURCE),
+-                RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::COPY_DEST)
++                RenderTextureBarrier(crackFillCopy, RenderTextureLayout::COPY_DEST)
+             });
+ 
+-            commandList->copyTexture(crackFillCopy.get(), colorTarget->texture.get());
++            commandList->copyTexture(crackFillCopy, colorTarget->texture.get());
+             commandList->barriers(RenderBarrierStage::GRAPHICS, {
+                 RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COLOR_WRITE),
+-                RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::SHADER_READ),
++                RenderTextureBarrier(crackFillCopy, RenderTextureLayout::SHADER_READ),
+                 RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ)
+             });
+ 
+@@ -1366,7 +1368,7 @@ namespace RT64 {
+                 if ((pendingDof.colorTarget == nullptr) && framebuffer.motion.valid) {
+                     if ((sceneDepthCopy == nullptr) || (sceneDepthWidth != depthTarget->width) || (sceneDepthHeight != depthTarget->height) ||
+                         (sceneDepthSamples != depthTarget->multisampling.sampleCount) || (sceneDepthFormat != depthTarget->format)) {
+-                        sceneDepthCopyView.reset();
++                        retireTexture(std::move(sceneDepthCopy), std::move(sceneDepthCopyView));
+                         sceneDepthCopy = worker->device->createTexture(RenderTextureDesc::DepthTarget(depthTarget->width, depthTarget->height, depthTarget->format, depthTarget->multisampling));
+                         sceneDepthCopyView = sceneDepthCopy->createTextureView(RenderTextureViewDesc::Texture2D(depthTarget->format));
+                         sceneDepthWidth = depthTarget->width;
+@@ -1414,6 +1416,62 @@ namespace RT64 {
+         });
+     }
+ 
++    RenderTexture *FramebufferRenderer::crackFillCopyFor(RenderDevice *device, const RenderTarget *colorTarget) {
++        if (colorTarget == nullptr) {
++            return nullptr;
++        }
++
++        crackFillCopyUse++;
++        for (CrackFillCopy &copy : crackFillCopies) {
++            if ((copy.width == colorTarget->width) && (copy.height == colorTarget->height) && (copy.format == colorTarget->format) &&
++                (copy.samples == colorTarget->multisampling.sampleCount)) {
++                copy.lastUse = crackFillCopyUse;
++                return copy.texture.get();
++            }
++        }
++
++        // (Null device: only one that's there already.)
++        if (device == nullptr) {
++            return nullptr;
++        }
++
++        // Past four sizes, the one unused for longest goes.
++        if (crackFillCopies.size() >= 4) {
++            size_t oldest = 0;
++            for (size_t i = 1; i < crackFillCopies.size(); i++) {
++                if (crackFillCopies[i].lastUse < crackFillCopies[oldest].lastUse) {
++                    oldest = i;
++                }
++            }
++
++            retireTexture(std::move(crackFillCopies[oldest].texture));
++            crackFillCopies.erase(crackFillCopies.begin() + oldest);
++        }
++
++        CrackFillCopy copy;
++        copy.texture = device->createTexture(RenderTextureDesc::ColorTarget(colorTarget->width, colorTarget->height, colorTarget->format, colorTarget->multisampling));
++        copy.width = colorTarget->width;
++        copy.height = colorTarget->height;
++        copy.format = colorTarget->format;
++        copy.samples = colorTarget->multisampling.sampleCount;
++        copy.lastUse = crackFillCopyUse;
++        crackFillCopies.emplace_back(std::move(copy));
++        return crackFillCopies.back().texture.get();
++    }
++
++    void FramebufferRenderer::retireTexture(std::unique_ptr<RenderTexture> texture, std::unique_ptr<RenderTextureView> view) {
++        if (texture == nullptr) {
++            return;
++        }
++
++        retiredTextures.emplace_back(std::move(texture), std::move(view));
++        while (retiredTextures.size() > 8) {
++            // (The view before its texture.)
++            retiredTextures.front().second.reset();
++            retiredTextures.pop_front();
++        }
++    }
++
+     void FramebufferRenderer::applyPendingDof(RenderWorker *worker) {
+         RenderTarget *colorTarget = pendingDof.colorTarget;
+         RenderTarget *depthTarget = pendingDof.depthTarget;
+@@ -1421,9 +1479,12 @@ namespace RT64 {
+         const float start = pendingDof.start, m22 = pendingDof.m22, m32 = pendingDof.m32, vpScaleZ = pendingDof.vpScaleZ, vpTranslateZ = pendingDof.vpTranslateZ;
+         const MotionBlurParams motion = pendingDof.motion;
+         pendingDof = PendingDof();
+-        if ((colorTarget == nullptr) || (depthTarget == nullptr) || (crackFillCopy == nullptr) ||
+-            (crackFillCopyWidth != colorTarget->width) || (crackFillCopyHeight != colorTarget->height) || (crackFillCopySamples != colorTarget->multisampling.sampleCount) ||
+-            (crackFillCopyFormat != colorTarget->format)) {
++        if ((colorTarget == nullptr) || (depthTarget == nullptr)) {
++            return;
++        }
++
++        RenderTexture *crackFillCopy = crackFillCopyFor(nullptr, colorTarget);
++        if (crackFillCopy == nullptr) {
+             return;
+         }
+ 
+@@ -1441,26 +1502,19 @@ namespace RT64 {
+             dofSet = std::make_unique<CrackFillDescriptorSet>(worker->device);
+         }
+ 
+-        if (dofSetColorTexture != crackFillCopy.get()) {
+-            dofSet->setTexture(dofSet->gColor, crackFillCopy.get(), RenderTextureLayout::SHADER_READ);
+-            dofSetColorTexture = crackFillCopy.get();
+-        }
+-
+-        if (dofSetDepthTexture != depthTarget->texture.get()) {
+-            dofSet->setTexture(dofSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
+-            dofSetDepthTexture = depthTarget->texture.get();
+-        }
++        dofSet->setTexture(dofSet->gColor, crackFillCopy, RenderTextureLayout::SHADER_READ);
++        dofSet->setTexture(dofSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
+ 
+         RenderCommandList *commandList = worker->commandList.get();
+         commandList->barriers(RenderBarrierStage::COPY, {
+             RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COPY_SOURCE),
+-            RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::COPY_DEST)
++            RenderTextureBarrier(crackFillCopy, RenderTextureLayout::COPY_DEST)
+         });
+ 
+-        commandList->copyTexture(crackFillCopy.get(), colorTarget->texture.get());
++        commandList->copyTexture(crackFillCopy, colorTarget->texture.get());
+         commandList->barriers(RenderBarrierStage::GRAPHICS, {
+             RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COLOR_WRITE),
+-            RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::SHADER_READ),
++            RenderTextureBarrier(crackFillCopy, RenderTextureLayout::SHADER_READ),
+             RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ)
+         });
+ 
+@@ -1505,35 +1559,29 @@ namespace RT64 {
+             return;
+         }
+ 
+-        if (motionBlurSet == nullptr) {
+-            motionBlurSet = std::make_unique<MotionBlurDescriptorSet>(worker->device);
+-        }
+-
+-        if (motionBlurSetColor != crackFillCopy.get()) {
+-            motionBlurSet->setTexture(motionBlurSet->gColor, crackFillCopy.get(), RenderTextureLayout::SHADER_READ);
+-            motionBlurSetColor = crackFillCopy.get();
++        RenderTexture *crackFillCopy = crackFillCopyFor(nullptr, colorTarget);
++        if (crackFillCopy == nullptr) {
++            return;
+         }
+ 
+-        if (motionBlurSetDepth != depthTarget->texture.get()) {
+-            motionBlurSet->setTexture(motionBlurSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
+-            motionBlurSetDepth = depthTarget->texture.get();
++        if (motionBlurSet == nullptr) {
++            motionBlurSet = std::make_unique<MotionBlurDescriptorSet>(worker->device);
+         }
+ 
+-        if (motionBlurSetScene != sceneDepthCopy.get()) {
+-            motionBlurSet->setTexture(motionBlurSet->gSceneDepth, sceneDepthCopy.get(), RenderTextureLayout::DEPTH_READ, sceneDepthCopyView.get());
+-            motionBlurSetScene = sceneDepthCopy.get();
+-        }
++        motionBlurSet->setTexture(motionBlurSet->gColor, crackFillCopy, RenderTextureLayout::SHADER_READ);
++        motionBlurSet->setTexture(motionBlurSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
++        motionBlurSet->setTexture(motionBlurSet->gSceneDepth, sceneDepthCopy.get(), RenderTextureLayout::DEPTH_READ, sceneDepthCopyView.get());
+ 
+         RenderCommandList *commandList = worker->commandList.get();
+         commandList->barriers(RenderBarrierStage::COPY, {
+             RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COPY_SOURCE),
+-            RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::COPY_DEST)
++            RenderTextureBarrier(crackFillCopy, RenderTextureLayout::COPY_DEST)
+         });
+ 
+-        commandList->copyTexture(crackFillCopy.get(), colorTarget->texture.get());
++        commandList->copyTexture(crackFillCopy, colorTarget->texture.get());
+         commandList->barriers(RenderBarrierStage::GRAPHICS, {
+             RenderTextureBarrier(colorTarget->texture.get(), RenderTextureLayout::COLOR_WRITE),
+-            RenderTextureBarrier(crackFillCopy.get(), RenderTextureLayout::SHADER_READ),
++            RenderTextureBarrier(crackFillCopy, RenderTextureLayout::SHADER_READ),
+             RenderTextureBarrier(depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ),
+             RenderTextureBarrier(sceneDepthCopy.get(), RenderTextureLayout::DEPTH_READ)
+         });
+@@ -1845,28 +1893,15 @@ namespace RT64 {
+                 framebuffer.crackFill = false;
+             }
+             if (framebuffer.crackFill) {
+-                if ((crackFillCopy == nullptr) || (crackFillCopyWidth != colorTarget->width) || (crackFillCopyHeight != colorTarget->height) || (crackFillCopyFormat != colorTarget->format) ||
+-                    (crackFillCopySamples != colorTarget->multisampling.sampleCount)) {
+-                    crackFillCopy = p.worker->device->createTexture(RenderTextureDesc::ColorTarget(colorTarget->width, colorTarget->height, colorTarget->format, colorTarget->multisampling));
+-                    crackFillCopySamples = colorTarget->multisampling.sampleCount;
+-                    crackFillCopyWidth = colorTarget->width;
+-                    crackFillCopyHeight = colorTarget->height;
+-                    crackFillCopyFormat = colorTarget->format;
+-                }
+-
+                 if (framebuffer.crackFillSet == nullptr) {
+                     framebuffer.crackFillSet = std::make_unique<CrackFillDescriptorSet>(p.worker->device);
+                 }
+ 
+-                if (framebuffer.crackFillCopyTexture != crackFillCopy.get()) {
+-                    framebuffer.crackFillSet->setTexture(framebuffer.crackFillSet->gColor, crackFillCopy.get(), RenderTextureLayout::SHADER_READ);
+-                    framebuffer.crackFillCopyTexture = crackFillCopy.get();
+-                }
+-
+-                if (framebuffer.crackFillDepthTexture != depthTarget->texture.get()) {
+-                    framebuffer.crackFillSet->setTexture(framebuffer.crackFillSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
+-                    framebuffer.crackFillDepthTexture = depthTarget->texture.get();
+-                }
++                // (Set every time: a target remade at the same address is another texture.)
++                framebuffer.crackFillCopyTexture = crackFillCopyFor(p.worker->device, colorTarget);
++                framebuffer.crackFillSet->setTexture(framebuffer.crackFillSet->gColor, framebuffer.crackFillCopyTexture, RenderTextureLayout::SHADER_READ);
++                framebuffer.crackFillSet->setTexture(framebuffer.crackFillSet->gDepth, depthTarget->texture.get(), RenderTextureLayout::DEPTH_READ, depthTarget->textureView.get());
++                framebuffer.crackFillDepthTexture = depthTarget->texture.get();
+ 
+                 framebuffer.crackFillHoles = isFullFrameView() && isRaceHoleFill();
+ 
+diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
+index 7287803..e872f62 100644
+--- a/src/render/rt64_framebuffer_renderer.h
++++ b/src/render/rt64_framebuffer_renderer.h
+@@ -4,6 +4,7 @@
+ 
+ #pragma once
+ 
++#include <deque>
+ #include <stdint.h>
+ 
+ #include "common/rt64_emulator_configuration.h"
+@@ -128,7 +129,7 @@ namespace RT64 {
+             RenderTargetDrawCall renderTargetDrawCall;
+             RenderViewport viewport;
+             std::unique_ptr<CrackFillDescriptorSet> crackFillSet;
+-            const RenderTexture *crackFillCopyTexture = nullptr;
++            RenderTexture *crackFillCopyTexture = nullptr;
+             const RenderTexture *crackFillDepthTexture = nullptr;
+             bool crackFill = false;
+             bool crackFillHoles = false;
+@@ -182,11 +183,24 @@ namespace RT64 {
+         void flushPendingDof(RenderWorker *worker);
+ 
+         // Copy of the colour target read by the crack fill pass.
+-        std::unique_ptr<RenderTexture> crackFillCopy;
+-        uint32_t crackFillCopyWidth = 0;
+-        uint32_t crackFillCopyHeight = 0;
+-        RenderFormat crackFillCopyFormat = RenderFormat::UNKNOWN;
+-        uint32_t crackFillCopySamples = 0;
++        // One for each size of colour target in use: a frame can draw to more than one (GT64 leaving a race), and a
++        // single copy remade for each was the wrong size for (and destroyed under) the passes already set up with it:
++        // the device was then removed (DXGI_ERROR_DEVICE_HUNG in the crack fill's draw).
++        struct CrackFillCopy {
++            std::unique_ptr<RenderTexture> texture;
++            uint32_t width = 0;
++            uint32_t height = 0;
++            RenderFormat format = RenderFormat::UNKNOWN;
++            uint32_t samples = 0;
++            uint64_t lastUse = 0;
++        };
++
++        std::vector<CrackFillCopy> crackFillCopies;
++        uint64_t crackFillCopyUse = 0;
++        RenderTexture *crackFillCopyFor(RenderDevice *device, const RenderTarget *colorTarget);
++        // Textures no longer used, kept until the frames drawn with them are well past.
++        std::deque<std::pair<std::unique_ptr<RenderTexture>, std::unique_ptr<RenderTextureView>>> retiredTextures;
++        void retireTexture(std::unique_ptr<RenderTexture> texture, std::unique_ptr<RenderTextureView> view = nullptr);
+ 
+         std::vector<Framebuffer> framebufferVector;
+         std::vector<BufferUploader *> pendingUploaders;
