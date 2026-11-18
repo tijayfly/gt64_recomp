@@ -174,6 +174,9 @@ apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/
 # alive (a frame with two sizes of target, GT64 leaving a race or qualifying, copied into the wrong-sized one and the
 # device was removed).
 apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-crack-fill-copies.patch)
+# Render target textures are kept two seconds after a resize or destroy: the present thread could still be making
+# a descriptor for an interpolated target the workload thread had just resized (a driver crash leaving qualifying).
+apply_dependency_patch(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_SOURCE_DIR}/patches/deps/rt64-deferred-target-release.patch)
 
 apply_dependency_patches()
 
