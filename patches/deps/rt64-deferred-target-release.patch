@@ -1,0 +1,103 @@
+diff --git a/src/render/rt64_render_target.cpp b/src/render/rt64_render_target.cpp
+index 81917bc..a9e45e7 100644
+--- a/src/render/rt64_render_target.cpp
++++ b/src/render/rt64_render_target.cpp
+@@ -5,6 +5,9 @@
+ #include "rt64_render_target.h"
+ 
+ #include <algorithm>
++#include <chrono>
++#include <deque>
++#include <mutex>
+ 
+ #include "gbi/rt64_f3d.h"
+ #include "shared/rt64_fb_common.h"
+@@ -35,22 +38,75 @@ namespace RT64 {
+ #if PRINT_CONSTRUCTOR_DESTRUCTOR
+         fprintf(stdout, "~RenderTarget(0x%p)\n", this);
+ #endif
++        releaseTextures();
++    }
++
++    // GT64: a target's textures are kept for a while after it is resized or destroyed instead of going at once. The
++    // present thread draws the in-between frames from the interpolated targets without the workload lock, and the
++    // workload thread stops waiting for it after a while (to avoid a deadlock); a target it then resized under the
++    // present thread was destroyed while the present thread made a descriptor for it (a crash in the driver, in
++    // VIRenderer::render, leaving qualifying or a race). Kept two seconds, then destroyed by the next release.
++    namespace {
++        struct ReleasedTextures {
++            // (Destroyed in the reverse order: descriptor sets, then framebuffers and views, then the textures.)
++            std::unique_ptr<RenderTexture> texture;
++            std::unique_ptr<RenderTexture> resolvedTexture;
++            std::unique_ptr<RenderTexture> downsampledTexture;
++            std::unique_ptr<RenderTexture> dummyTexture;
++            std::unique_ptr<RenderTextureView> textureView;
++            std::unique_ptr<RenderTextureView> resolvedTextureView;
++            std::unique_ptr<RenderFramebuffer> textureFramebuffer;
++            std::unique_ptr<RenderFramebuffer> resolveFramebuffer;
++            decltype(RenderTarget::targetCopyDescSet) targetCopyDescSet;
++            decltype(RenderTarget::textureCopyDescSet) textureCopyDescSet;
++            decltype(RenderTarget::textureResolveDescSet) textureResolveDescSet;
++            decltype(RenderTarget::filterDescSet) filterDescSet;
++            decltype(RenderTarget::fbWriteDescSet) fbWriteDescSet;
++            std::chrono::steady_clock::time_point released;
++        };
++
++        std::mutex releasedMutex;
++
++        // (Never destroyed: at exit the device may already be gone.)
++        std::deque<std::unique_ptr<ReleasedTextures>> &releasedTextures() {
++            static auto *released = new std::deque<std::unique_ptr<ReleasedTextures>>();
++            return *released;
++        }
+     }
+ 
+     void RenderTarget::releaseTextures() {
+-        textureView.reset();
+-        resolvedTextureView.reset();
+-        texture.reset();
+-        resolvedTexture.reset();
+-        downsampledTexture.reset();
+-        dummyTexture.reset();
+-        textureFramebuffer.reset();
+-        resolveFramebuffer.reset();
+-        targetCopyDescSet.reset();
+-        textureCopyDescSet.reset();
+-        textureResolveDescSet.reset();
+-        filterDescSet.reset();
+-        fbWriteDescSet.reset();
++        auto released = std::make_unique<ReleasedTextures>();
++        released->texture = std::move(texture);
++        released->resolvedTexture = std::move(resolvedTexture);
++        released->downsampledTexture = std::move(downsampledTexture);
++        released->dummyTexture = std::move(dummyTexture);
++        released->textureView = std::move(textureView);
++        released->resolvedTextureView = std::move(resolvedTextureView);
++        released->textureFramebuffer = std::move(textureFramebuffer);
++        released->resolveFramebuffer = std::move(resolveFramebuffer);
++        released->targetCopyDescSet = std::move(targetCopyDescSet);
++        released->textureCopyDescSet = std::move(textureCopyDescSet);
++        released->textureResolveDescSet = std::move(textureResolveDescSet);
++        released->filterDescSet = std::move(filterDescSet);
++        released->fbWriteDescSet = std::move(fbWriteDescSet);
++        released->released = std::chrono::steady_clock::now();
++
++        std::deque<std::unique_ptr<ReleasedTextures>> expired;
++        {
++            const std::scoped_lock lock(releasedMutex);
++            auto &queue = releasedTextures();
++            const auto now = released->released;
++            while (!queue.empty() && ((now - queue.front()->released) > std::chrono::seconds(2))) {
++                expired.emplace_back(std::move(queue.front()));
++                queue.pop_front();
++            }
++
++            if (released->texture != nullptr || released->resolvedTexture != nullptr || released->downsampledTexture != nullptr || released->dummyTexture != nullptr) {
++                queue.emplace_back(std::move(released));
++            }
++        }
++
++        // (The expired ones, and an empty release, are destroyed here, outside the lock.)
+     }
+ 
+     bool RenderTarget::resize(RenderWorker *worker, uint32_t newWidth, uint32_t newHeight) {
